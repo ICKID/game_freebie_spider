@@ -3,10 +3,9 @@ import requests
 from bs4 import BeautifulSoup
 import os
 
-# 讀取 GitHub Secrets 保險箱
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
+HISTORY_FILE = "posted_links.txt" # 🎯 記憶已發送網址的檔案
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -14,8 +13,20 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+def load_history():
+    """讀取過去已經發送過的網址歷史紀錄"""
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+def save_history(history_set):
+    """將發送過的網址更新回檔案中"""
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        for link in sorted(history_set):
+            f.write(f"{link}\n")
+
 def extract_all_store_links(page_url, news_title=""):
-    """精準提取內頁的遊戲商店領取網址，並過濾雜訊"""
     found_stores = set()
     title_lower = news_title.lower()
     is_epic_news = "epic" in title_lower
@@ -30,36 +41,24 @@ def extract_all_store_links(page_url, news_title=""):
         links = inner_soup.find_all('a', href=True)
         for tag in links:
             href = tag['href'].split('?')[0].rstrip('/')
-            
-            # 1. 處理 Steam 網址 (如果標題表明是 Epic 限免，就過濾掉無關的 Steam 網址)
             if "store.steampowered.com/app/" in href and not is_epic_news:
-                if "agecheck" not in href: 
-                    found_stores.add(href)
-                    
-            # 2. 處理 Epic 網址 (過濾掉登入、下載、主首頁等無效連結)
+                if "agecheck" not in href: found_stores.add(href)
             elif "epicgames.com" in href and not is_steam_news:
                 if "id/login" not in href and "download" not in href and "privacy" not in href:
                     if href != "https://store.epicgames.com" and href != "https://www.epicgames.com":
                         found_stores.add(href)
-                    
-            # 3. 處理 GOG 網址
             elif "gog.com" in href and not is_epic_news:
                 found_stores.add(href)
-    except: 
-        pass
+    except: pass
     return list(found_stores)
 
 def send_to_discord(title, store_links, source):
-    """將結果打包發送到 Discord 頻道"""
     if not store_links: return
-    if not DISCORD_WEBHOOK_URL: 
-        print("❌ 找不到 Discord Webhook 網址，請檢查 GitHub Secrets！")
-        return
+    if not DISCORD_WEBHOOK_URL: return
     
     from discord_webhook import DiscordWebhook, DiscordEmbed
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    # 根據平台動態調整卡片顏色 (Steam=藍色, Epic=灰色/黑色, GOG=金色)
     links_str = "".join(store_links).lower()
     card_color = "00c0ff" if "steam" in links_str else "1a1a1a" if "epic" in links_str else "f1c40f"
     
@@ -75,35 +74,47 @@ def send_to_discord(title, store_links, source):
     webhook.execute()
 
 def main():
-    print("🚀 GitHub Actions 穩定版限免爬蟲啟動（目標：FreeSteam）...")
+    print("🚀 GitHub Actions 智慧去重版爬蟲啟動...")
+    
+    # 載入記憶膠囊
+    history = load_history()
+    print(f"📋 載入歷史紀錄，目前已記憶了 {len(history)} 個網址。")
     
     try:
-        print("🔎 正在檢查 FreeSteam 最新限免情報...")
         response = requests.get(URL_FREESTEAM, headers=HEADERS, timeout=15)
-        print(f"   FreeSteam 回應狀態碼: {response.status_code}")
-        
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = soup.find_all('article')
-        print(f"   成功撈取到 {len(articles)} 則最新情報，準備解析前 3 篇...")
         
         count = 0
-        for article in articles[:3]: # 每次推播最新的前 3 篇
+        # 🎯 爬蟲撈到文章後，我們從最後面（舊的）往前（新的）檢查，這樣推播順序才對
+        for article in reversed(articles[:5]): 
             tag = article.select_one('.entry-title a, h2 a, h3 a')
             if tag:
+                article_url = tag['href'].strip()
                 title = tag.text.strip()
-                print(f"   [FreeSteam] 正在解析內頁: {title[:30]}...")
-                links = extract_all_store_links(tag['href'], title)
+                
+                # 🎯 核心判定：這個文章網址以前發過嗎？
+                if article_url in history:
+                    print(f"   ⏭️ 跳過已發送的文章: {title[:20]}...")
+                    continue
+                
+                print(f"   🔥 發現全新未推播的文章！開始解析: {title[:20]}...")
+                links = extract_all_store_links(article_url, title)
                 
                 if links:
                     send_to_discord(title, links, "FreeSteam")
+                    history.add(article_url) # 🎯 塞進新記憶
                     count += 1
                 else:
-                    print("   ⚠️ 該文章內未偵測到有效的商店直達連結，跳過推播。")
+                    print("   ⚠️ 無有效商店連結，但依然標記為已讀。")
+                    history.add(article_url)
                     
-        print(f"   [FreeSteam] 處理完畢，共成功推播了 {count} 則新聞至 Discord！")
+        # 儲存新記憶
+        save_history(history)
+        print(f"   [FreeSteam] 處理完畢，本次共推播了 {count} 則全新限免！")
         
-    except Exception as e: 
-        print(f"❌ FreeSteam 流程發生異常: {e}")
+    except Exception as e:
+        print(f"❌ 發生異常: {e}")
 
     print("\n🎉 全數流程執行完畢！")
 
