@@ -7,7 +7,6 @@ import os
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
-# 🎯 繼續走無敵的 RSS 路線
 URL_4GAMERS_RSS = "https://www.4gamers.com.tw/rss/tags/%E9%99%90%E6%99%82%E5%85%8D%E8%B2%BB"
 
 HEADERS = {
@@ -83,15 +82,15 @@ def main():
                 send_to_discord(title, links, "FreeSteam")
     except Exception as e: print(f"❌ FreeSteam 異常: {e}")
 
-    # 2. 檢查 4Gamers (強效包容型 RSS 模式)
+    # 2. 檢查 4Gamers (內建解析器 RSS 模式)
     try:
         print("🔎 正在檢查 4Gamers (RSS 模式)...")
         response = requests.get(URL_4GAMERS_RSS, headers=HEADERS, timeout=15)
         print(f"   4Gamers RSS 回應狀態碼: {response.status_code}")
         
         if response.status_code == 200:
-            # 🎯 核心改動：改用 BeautifulSoup(..., 'xml') 來吃髒資料，絕對不崩潰
-            rss_soup = BeautifulSoup(response.content, 'xml')
+            # 🎯 核心修正：改用內建的 'html.parser'，它不需要額外安裝任何 lxml 套件，在所有環境都能跑
+            rss_soup = BeautifulSoup(response.content, 'html.parser')
             items = rss_soup.find_all('item')
             print(f"   [RSS] 成功跨國抓取到 {len(items)} 則最新限免新聞！")
             
