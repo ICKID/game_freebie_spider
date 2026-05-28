@@ -9,7 +9,6 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
 URL_4GAMERS_API = "https://www.4gamers.com.tw/site/api/news/by-tag?tag=%E9%99%90%E6%99%82%E5%85%8D%E8%B2%BB&nextStart=0&pageSize=25"
-# 🎯 新增海外備用網頁路徑
 URL_4GAMERS_WEB = "https://www.4gamers.com.tw/news/tag/%E9%99%90%E6%99%82%E5%85%8D%E8%B2%BB"
 
 HEADERS = {
@@ -85,14 +84,20 @@ def main():
                 send_to_discord(title, links, "FreeSteam")
     except Exception as e: print(f"❌ FreeSteam 異常: {e}")
 
-    # 2. 4Gamers (備用雙軌偵測)
+    # 2. 4Gamers (強制嚴格雙軌偵測)
     try:
         print("🔎 正在檢查 4Gamers (API 模式)...")
         response = requests.get(URL_4GAMERS_API, headers=HEADERS, timeout=15)
         
-        # 判斷如果被海外阻擋 (例如狀態碼非 200 或無資料)，自動切換成網頁模式
-        if response.status_code == 200 and "data" in response.json():
-            news_list = response.json().get('data', {}).get('list', [])
+        news_list = []
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                news_list = data.get('data', {}).get('list', []) or data.get('list', [])
+            except: pass
+            
+        # 🎯 關鍵改動：除了狀態碼，如果捞出來的列表長度是 0，也視為被海外限制，強行切換！
+        if response.status_code == 200 and len(news_list) > 0:
             print(f"   [API] 成功在雲端撈取到 {len(news_list)} 則標題")
             for news in news_list[:3]:
                 title = news.get('title', '').strip()
@@ -100,30 +105,38 @@ def main():
                 links = extract_all_store_links(url, title)
                 send_to_discord(title, links, "4Gamers(API)")
         else:
-            print("   ⚠️ API 模式遭海外IP限制，啟動【備用網頁無痕爬蟲】技術...")
+            print("   ⚠️ API 模式遭海外IP空資料限制！立刻啟動【備用網頁無痕爬蟲】...")
             web_res = requests.get(URL_4GAMERS_WEB, headers=HEADERS, timeout=15)
             soup = BeautifulSoup(web_res.text, 'html.parser')
             
-            # 精準抓取 4Gamers 標籤頁面的文章區塊
-            articles = soup.select('div.news_tags_list div.news-card, div.posts-row a, a.news-card')
-            if not articles:
-                # 泛用型抓取超連結
-                articles = [a for a in soup.find_all('a', href=True) if "/news/detail/" in a['href']][:4]
-                
+            # 撈取網頁中所有可能是新聞的超連結
+            all_links = soup.find_all('a', href=True)
+            
             count = 0
-            for a in articles:
+            seen_urls = set()
+            for a in all_links:
                 url_path = a['href']
-                url = url_path if url_path.startswith('http') else f"https://www.4gamers.com.tw{url_path}"
-                
-                title = a.get_text().strip()
-                title = title.split('\n')[0] # 只要第一行，過濾雜訊
-                
-                if title and "/news/detail/" in url:
+                if "/news/detail/" in url_path:
+                    url = url_path if url_path.startswith('http') else f"https://www.4gamers.com.tw{url_path}"
+                    
+                    if url in seen_urls: continue
+                    seen_urls.add(url)
+                    
+                    # 抓取該超連結標籤內部的文字當作標題，或者找周圍的 title 屬性
+                    title = a.get_text().strip()
+                    if not title and a.find('title'): title = a['title']
+                    
+                    # 清理標題文字雜訊
+                    title = " ".join(title.split())
+                    if len(title) < 5: continue # 太短的可能是純按鈕文字，跳過
+                    
+                    print(f"   [網頁版] 成功拆出文章: {title[:20]}...")
                     links = extract_all_store_links(url, title)
                     send_to_discord(title, links, "4Gamers(網頁版)")
+                    
                     count += 1
                     if count >= 3: break
-            print(f"   [網頁版] 成功繞過限制，處理了 {count} 則新聞")
+            print(f"   [網頁版] 處理完畢，共解析了 {count} 則新聞")
             
     except Exception as e:
         print(f"❌ 4Gamers 雙軌流程皆發生異常: {e}")
