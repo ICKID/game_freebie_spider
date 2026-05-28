@@ -2,9 +2,8 @@ name: 每日自動限免推播
 
 on:
   schedule:
-    # ⏰ 每天國際時間 (UTC) 00:00 執行，相當於台灣時間 (GMT+8) 早上 08:00
     - cron: '0 0 * * *'
-  workflow_dispatch: # 這個可以讓你隨時在網頁上按按鈕手動測試
+  workflow_dispatch: # 讓你可以手動點擊測試
 
 jobs:
   run-spider:
@@ -12,10 +11,10 @@ jobs:
 
     steps:
     - name: 複製專案代碼
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4 # 🎯 升級到 v4
 
     - name: 設定 Python 環境
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5 # 🎯 升級到 v5
       with:
         python-version: '3.10'
 
@@ -26,6 +25,5 @@ jobs:
 
     - name: 執行限免爬蟲
       env:
-        # 🗝️ 從 GitHub 保險箱把網址拿出來交給 Python
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: python game_freebie_spider.py
