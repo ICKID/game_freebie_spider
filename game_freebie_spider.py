@@ -7,8 +7,8 @@ import os
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
-# 🎯 改用對海外 IP 超友善、資訊更狂的巴哈姆特 GNN 「限時免費」新聞關鍵字頁面
-URL_BAHA_GNN = "https://gnn.gamer.com.tw/search.php?kw=%B9%A5%AE%C9%A5%C2%B0%EA" # "限時免費" 的 Big5 編碼
+# 使用巴哈姆特 GNN 「限時免費」新聞頁面（全球暢通）
+URL_BAHA_GNN = "https://gnn.gamer.com.tw/search.php?kw=%B9%A5%AE%C9%A5%C2%B0%EA"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -32,13 +32,18 @@ def extract_all_store_links(page_url, news_title=""):
         for tag in links:
             href = tag['href'].split('?')[0].rstrip('/')
             
+            # 🎯 核心過濾機制：排除非遊戲本體的無效 Epic 連結（登入與下載頁面）
+            if "epicgames.com/id/login" in href or "epicgames.com" and "download" in href:
+                continue
+                
             # 1. 處理 Steam 網址
             if "store.steampowered.com/app/" in href and not is_epic_news:
                 if "agecheck" not in href: found_stores.add(href)
                     
-            # 2. 處理 Epic 網址
+            # 2. 處理 Epic 網址（排除登入、下載、主首頁等無效連結）
             elif "epicgames.com" in href and not is_steam_news:
-                if "privacy" not in href and href != "https://store.epicgames.com": found_stores.add(href)
+                if "privacy" not in href and href != "https://store.epicgames.com" and href != "https://www.epicgames.com":
+                    found_stores.add(href)
                     
             # 3. 處理 GOG 網址
             elif "gog.com" in href and not is_epic_news:
@@ -67,7 +72,7 @@ def send_to_discord(title, store_links, source):
     webhook.execute()
 
 def main():
-    print("🚀 GitHub Actions 跨國終極版爬蟲啟動...")
+    print("🚀 GitHub Actions 跨國終極過濾版爬蟲啟動...")
     
     # 1. 檢查 FreeSteam
     try:
@@ -82,7 +87,7 @@ def main():
                 send_to_discord(title, links, "FreeSteam")
     except Exception as e: print(f"❌ FreeSteam 異常: {e}")
 
-    # 2. 檢查 巴哈姆特 GNN 新聞 (完美暢通無阻)
+    # 2. 檢查 巴哈姆特 GNN 新聞
     try:
         print("🔎 正在檢查 巴哈姆特 GNN 新聞...")
         response = requests.get(URL_BAHA_GNN, headers=HEADERS, timeout=15)
@@ -90,10 +95,8 @@ def main():
         
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            # 抓取巴哈搜尋頁面的新聞區塊
             news_blocks = soup.select('div.GN-lbox2 p.GN-lbox2B a')
             if not news_blocks:
-                # 備用選擇器
                 news_blocks = [a for a in soup.find_all('a', href=True) if "sn=" in a['href']]
                 
             print(f"   [巴哈姆特] 成功在雲端撈取到 {len(news_blocks)} 則相關限免新聞！")
@@ -108,7 +111,6 @@ def main():
                 seen_urls.add(url)
                 
                 title = a.get_text().strip()
-                # 過濾掉太短的無效文字（例如點擊次數或作者名）
                 if len(title) < 8: continue
                 
                 print(f"   [巴哈姆特] 正在解析: {title[:18]}...")
@@ -121,8 +123,7 @@ def main():
         else:
             print(f"   ❌ 巴哈姆特回傳錯誤碼: {response.status_code}")
             
-    except Exception as e:
-        print(f"❌ 巴哈姆特流程發生異常: {e}")
+    except Exception as e: print(f"❌ 巴哈姆特流程發生異常: {e}")
 
     print("\n🎉 全數流程執行完畢！")
 
