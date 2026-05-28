@@ -1,20 +1,28 @@
-name: 每日自動限免推播
+name: 智慧即時限免去重推播
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    # ⏰ 核心改動：改成每 5 分鐘執行一次，這是 GitHub 免費額度的最快極限！
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
   run-spider:
     runs-on: ubuntu-latest
-    # 🎯 核心改動：在這裡直接塞入環境變數，堵住 GitHub Actions 的嘴
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
     - name: 複製專案代碼
       uses: actions/checkout@v4
+
+    - name: 讀取發送歷史快取
+      uses: actions/cache@v4
+      with:
+        path: posted_links.txt
+        key: spider-history-${{ github.run_id }}
+        restore-keys: |
+          spider-history-
 
     - name: 設定 Python 環境
       uses: actions/setup-python@v5
