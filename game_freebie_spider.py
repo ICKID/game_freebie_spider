@@ -2,9 +2,10 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
-from discord_webhook import DiscordWebhook, DiscordEmbed
+import os
+import traceback # 🎯 引入追蹤工具
 
-# 🎯 請在這裡貼上你從 Discord 複製的 Webhook 網址
+# 讀取 GitHub Secrets 保險箱
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
@@ -12,7 +13,9 @@ URL_4GAMERS_API = "https://www.4gamers.com.tw/site/api/news/by-tag?tag=%E9%99%90
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/json"
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/json",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.google.com/"
 }
 
 def extract_all_store_links(page_url):
@@ -40,54 +43,52 @@ def extract_all_store_links(page_url):
     return list(found_stores)
 
 def send_to_discord(title, store_links, source):
-    """將抓到的遊戲做成漂亮的 Discord 卡片發送出去"""
-    if not store_links:
-        return # 如果完全沒商店連結就不重複發送了，保持頻道乾淨
+    if not store_links: return
+    if not DISCORD_WEBHOOK_URL:
+        print(f"❌ 錯誤：找不到 Discord Webhook 網址，請檢查 GitHub Secrets 設定！")
+        return
         
+    from discord_webhook import DiscordWebhook, DiscordEmbed
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
-    
-    # 根據不同平台給予卡片不同的顏色 (Steam=藍色, Epic=黑色)
     card_color = "00c0ff" if "steam" in "".join(store_links) else "1a1a1a"
     
-    embed = DiscordEmbed(
-        title=title, 
-        description=f"📰 資訊來源: {source}", 
-        color=card_color
-    )
-    
-    # 把所有直達商店網址塞進卡片裡
+    embed = DiscordEmbed(title=title, description=f"📰 資訊來源: {source}", color=card_color)
     links_text = ""
-    for idx, link in enumerate(store_links, 1):
+    for link in store_links:
         platform = "Steam" if "steam" in link else "Epic Games" if "epic" in link else "GOG"
         links_text += f"🎮 [{platform} 直達傳送門]({link})\n"
         
     embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
     embed.set_timestamp()
-    
     webhook.add_embed(embed)
-    try:
-        webhook.execute()
-        print(f"✅ 已成功推播至 Discord: {title}")
-    except Exception as e:
-        print(f"❌ Discord 推播失敗: {e}")
+    webhook.execute()
 
 def main():
-    print("🚀 開始抓取最新限免遊戲並準備推播至 Discord...")
+    print("🚀 GitHub Actions 爬蟲開始執行...")
     
-    # 1. 檢查 FreeSteam
+    if not DISCORD_WEBHOOK_URL:
+        print("🚨 [嚴重錯誤] GitHub Secrets 中的 DISCORD_WEBHOOK_URL 沒有讀取到！請確認保險箱名稱是否完全正確。")
+    
+    # 1. FreeSteam
     try:
+        print("🔎 正在檢查 FreeSteam...")
         response = requests.get(URL_FREESTEAM, headers=HEADERS, timeout=15)
+        print(f"   FreeSteam 回應狀態碼: {response.status_code}")
         soup = BeautifulSoup(response.text, 'html.parser')
-        for article in soup.find_all('article')[:3]: # 每次推播最新的前 3 篇
+        for article in soup.find_all('article')[:3]:
             tag = article.select_one('.entry-title a, h2 a, h3 a')
             if tag:
                 links = extract_all_store_links(tag['href'])
                 send_to_discord(tag.text.strip(), links, "FreeSteam")
-    except Exception as e: print(f" FreeSteam 失敗: {e}")
+    except Exception as e:
+        print(f"❌ FreeSteam 流程發生異常:")
+        traceback.print_exc() # 🎯 印出死在哪一行
 
-    # 2. 檢查 4Gamers
+    # 2. 4Gamers
     try:
+        print("🔎 正在檢查 4Gamers...")
         response = requests.get(URL_4GAMERS_API, headers=HEADERS, timeout=15)
+        print(f"   4Gamers 回應狀態碼: {response.status_code}")
         news_list = response.json().get('data', {}).get('list', [])[:3]
         for news in news_list:
             title = news.get('title', '').strip()
@@ -95,9 +96,11 @@ def main():
             if title and url:
                 links = extract_all_store_links(url)
                 send_to_discord(title, links, "4Gamers")
-    except Exception as e: print(f" 4Gamers 失敗: {e}")
+    except Exception as e:
+        print(f"❌ 4Gamers 流程發生異常:")
+        traceback.print_exc() # 🎯 印出死在哪一行
 
-    print("\n🎉 全數推播完畢！")
+    print("\n🎉 全數流程執行完畢！")
 
 if __name__ == "__main__":
     main()
