@@ -3,17 +3,16 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import os
-import xml.etree.ElementTree as ET # 🎯 引入 XML 解析工具
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
-# 🎯 改用無敵的官方 RSS Feed，全球 IP 皆可通行，且標籤同樣精準
+# 🎯 繼續走無敵的 RSS 路線
 URL_4GAMERS_RSS = "https://www.4gamers.com.tw/rss/tags/%E9%99%90%E6%99%82%E5%85%8D%E8%B2%BB"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
@@ -84,25 +83,27 @@ def main():
                 send_to_discord(title, links, "FreeSteam")
     except Exception as e: print(f"❌ FreeSteam 異常: {e}")
 
-    # 2. 檢查 4Gamers (終極無敵 RSS 模式)
+    # 2. 檢查 4Gamers (強效包容型 RSS 模式)
     try:
         print("🔎 正在檢查 4Gamers (RSS 模式)...")
         response = requests.get(URL_4GAMERS_RSS, headers=HEADERS, timeout=15)
         print(f"   4Gamers RSS 回應狀態碼: {response.status_code}")
         
         if response.status_code == 200:
-            # 解析 XML 結構
-            root = ET.fromstring(response.content)
-            # 尋找 RSS 中的所有文章項目 (item)
-            items = root.findall('.//item')
+            # 🎯 核心改動：改用 BeautifulSoup(..., 'xml') 來吃髒資料，絕對不崩潰
+            rss_soup = BeautifulSoup(response.content, 'xml')
+            items = rss_soup.find_all('item')
             print(f"   [RSS] 成功跨國抓取到 {len(items)} 則最新限免新聞！")
             
             count = 0
             for item in items:
-                title = item.find('title').text.strip()
-                url = item.find('link').text.strip()
+                title_tag = item.find('title')
+                link_tag = item.find('link')
                 
-                if title and url:
+                if title_tag and link_tag:
+                    title = title_tag.text.strip()
+                    url = link_tag.text.strip()
+                    
                     print(f"   [RSS] 正在解析: {title[:18]}...")
                     links = extract_all_store_links(url, title)
                     send_to_discord(title, links, "4Gamers(RSS)")
