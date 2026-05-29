@@ -49,7 +49,7 @@ def extract_all_store_links(page_url, news_title=""):
             if "store.steampowered.com/app/" in href and not is_epic_news:
                 if "agecheck" not in href: found_stores.add(href)
                     
-            # 處理 Epic 網址 (過濾掉登入、下載、主首頁等無效連結)
+            # 處理 Epic 網址
             elif "epicgames.com" in href and not is_steam_news:
                 if "id/login" not in href and "download" not in href and "privacy" not in href:
                     if href != "https://store.epicgames.com" and href != "https://www.epicgames.com":
@@ -70,11 +70,9 @@ def send_to_discord(title, store_links):
     from discord_webhook import DiscordWebhook, DiscordEmbed
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    # 根據平台動態調整卡片顏色 (Steam=藍色, Epic=黑色, GOG=金色)
     links_str = "".join(store_links).lower()
     card_color = "00c0ff" if "steam" in links_str else "1a1a1a" if "epic" in links_str else "f1c40f"
     
-    # 🎯 已刪除 description 欄位，卡片標題下方不再顯示「資訊來源」
     embed = DiscordEmbed(title=title, color=card_color)
     links_text = ""
     for link in store_links:
@@ -105,4 +103,29 @@ def main():
                 article_url = tag['href'].strip()
                 title = tag.text.strip()
                 
+                # 🎯 這裡縮進完全校正對齊
                 if article_url in history:
+                    print(f"   Skip: {title[:20]}...")
+                    continue
+                
+                print(f"   New Article: {title[:20]}...")
+                links = extract_all_store_links(article_url, title)
+                
+                if links:
+                    send_to_discord(title, links)
+                    history.add(article_url)
+                    count += 1
+                else:
+                    print("   ⚠️ 無有效商店連結，標記為已讀。")
+                    history.add(article_url)
+                    
+        save_history(history)
+        print(f"   [FreeSteam] 處理完畢，共推播了 {count} 則全新限免！")
+        
+    except Exception as e:
+        print(f"❌ 發生異常: {e}")
+
+    print("\n🎉 全數流程執行完畢！")
+
+if __name__ == "__main__":
+    main()
