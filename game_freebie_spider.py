@@ -45,19 +45,24 @@ def extract_all_store_links(page_url, news_title=""):
         for tag in links:
             href = tag['href'].split('?')[0].rstrip('/')
             
-            # 處理 Steam 網址
+            # 1. 處理 Steam 網址
             if "store.steampowered.com/app/" in href and not is_epic_news:
                 if "agecheck" not in href: found_stores.add(href)
                     
-            # 處理 Epic 網址
+            # 2. 處理 Epic 網址 (過濾掉登入、下載、主首頁等無效連結)
             elif "epicgames.com" in href and not is_steam_news:
                 if "id/login" not in href and "download" not in href and "privacy" not in href:
                     if href != "https://store.epicgames.com" and href != "https://www.epicgames.com":
                         found_stores.add(href)
                     
-            # 處理 GOG 網址
+            # 3. 處理 GOG 網址
             elif "gog.com" in href and not is_epic_news:
-                found_stores.add(href)
+                # 🎯 核心修正：切除 ##openlogin 等錨點雜訊，並排除純登入頁面
+                if "##openlogin" in href:
+                    href = href.split("##")[0].rstrip('/')
+                
+                if "account/login" not in href and href != "https://www.gog.com":
+                    found_stores.add(href)
     except: 
         pass
     return list(found_stores)
@@ -70,6 +75,7 @@ def send_to_discord(title, store_links):
     from discord_webhook import DiscordWebhook, DiscordEmbed
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
+    # 根據平台動態調整卡片顏色 (Steam=藍色, Epic=黑色, GOG=金色)
     links_str = "".join(store_links).lower()
     card_color = "00c0ff" if "steam" in links_str else "1a1a1a" if "epic" in links_str else "f1c40f"
     
@@ -103,7 +109,6 @@ def main():
                 article_url = tag['href'].strip()
                 title = tag.text.strip()
                 
-                # 🎯 這裡縮進完全校正對齊
                 if article_url in history:
                     print(f"   Skip: {title[:20]}...")
                     continue
