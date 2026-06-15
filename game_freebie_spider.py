@@ -39,7 +39,9 @@ def get_gog_cover_via_web(gog_url):
     return None
 
 def extract_all_store_links_and_pure_images(page_url):
+    """提取商店連結與關聯網址，並分別撈出首頁圖與 Steam 小工具圖"""
     found_stores = set()
+    widget_steam_urls = [] # 🎯 專門儲存來自 Steam Widget 小工具的網址
     all_game_urls_in_article = set()
     freesteam_main_image = None
     
@@ -55,6 +57,18 @@ def extract_all_store_links_and_pure_images(page_url):
             freesteam_main_image = og_img['content'].split('?')[0].strip()
 
         content_area = inner_soup.select_one('.entry-content') or inner_soup
+
+        # 🎯 優先檢查內門有沒有嵌入的 Steam Widget <iframe> 遊戲小工具
+        iframes = content_area.find_all('iframe', src=True)
+        for iframe in iframes:
+            src = iframe['src']
+            if "store.steampowered.com/widget/" in src:
+                try:
+                    app_id = src.split('/widget/')[1].split('/')[0]
+                    widget_url = f"https://store.steampowered.com/app/{app_id}"
+                    if widget_url not in widget_steam_urls:
+                        widget_steam_urls.append(widget_url)
+                except: pass
 
         links = content_area.find_all('a', href=True)
         for tag in links:
@@ -75,22 +89,17 @@ def extract_all_store_links_and_pure_images(page_url):
                 if "account/login" not in href and href != "https://www.gog.com":
                     found_stores.add(href)
                     all_game_urls_in_article.add(href)
-                    
-        iframes = content_area.find_all('iframe', src=True)
-        for iframe in iframes:
-            src = iframe['src']
-            if "store.steampowered.com/widget/" in src:
-                try:
-                    app_id = src.split('/widget/')[1].split('/')[0]
-                    widget_steam_url = f"https://store.steampowered.com/app/{app_id}"
-                    all_game_urls_in_article.add(widget_steam_url)
-                except: pass
 
     except: pass
-    return list(found_stores), list(all_game_urls_in_article), freesteam_main_image
+    
+    # 🎯 如果沒撈到 iframe Widget，就把一般的 steam 網址遞補進去當作生圖圖源
+    if not widget_steam_urls:
+        widget_steam_urls = [x for x in all_game_urls_in_article if "store.steampowered.com" in x]
+        
+    return list(found_stores), widget_steam_urls, freesteam_main_image
 
-def send_to_discord_clean_images(title, store_links, all_game_urls, freesteam_main_image):
-    """鐵腕去重演算法：只要是單一遊戲，不管是哪一國平台，一律只准出現 1 張圖！"""
+def send_to_discord_clean_images(title, store_links, widget_steam_urls, freesteam_main_image):
+    """大放送專用智慧除噪發送演算法"""
     if not store_links: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -102,28 +111,25 @@ def send_to_discord_clean_images(title, store_links, all_game_urls, freesteam_ma
     
     collected_covers = []
     
-    # 1. 優先放入 FreeSteam 幫這篇文章配的首頁精美大圖
-    if freesteam_main_image:
-        collected_covers.append(freesteam_main_image)
-        
-    # 2. 依序解析文內的商店網址來生圖
-    for game_url in all_game_urls:
-        if "store.steampowered.com/app/" in game_url:
+    # 🎯 核心分流邏輯判定：
+    # 狀況 A：如果只有一個直達領取連結 ➡️ 單一款遊戲
+    if len(store_links) == 1:
+        if freesteam_main_image:
+            collected_covers.append(freesteam_main_image) # 只留首頁圖
+            
+    # 狀況 B：有複數款遊戲大放送！ ➡️ 拋棄首頁圖，全部改抓內文 Steam 小工具的圖來排相簿
+    else:
+        for widget_url in widget_steam_urls:
             try:
-                app_id = game_url.split('/app/')[1].split('/')[0]
+                app_id = widget_url.split('/app/')[1].split('/')[0]
                 img_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
                 if img_url not in collected_covers:
                     collected_covers.append(img_url)
             except: pass
-        elif "gog.com" in game_url:
-            gog_cover = get_gog_cover_via_web(game_url)
-            if gog_cover and gog_cover not in collected_covers:
-                collected_covers.append(gog_cover)
-
-    # 🎯【核心鐵腕防線】不分平台！只要算出來「直達領取連結」只有 1 個，就代表這只是單一遊戲文章
-    # 既然是單一款遊戲，就強制精簡到只留第 1 張大圖，其餘衍生圖片全部作廢！
-    if len(store_links) == 1:
-        collected_covers = collected_covers[:1]
+            
+        # 如果複數遊戲卻完全沒撈到 Steam 小工具圖，才用首頁圖保底
+        if not collected_covers and freesteam_main_image:
+            collected_covers.append(freesteam_main_image)
 
     # 建立傳送門清單文字
     links_text = ""
@@ -140,7 +146,7 @@ def send_to_discord_clean_images(title, store_links, all_game_urls, freesteam_ma
     main_embed.set_timestamp()
     webhook.add_embed(main_embed)
     
-    # 只有在 len(store_links) > 1（複數遊戲大放送）時，這裡才可能有第 2 張圖，才會順利觸發多圖相簿
+    # 多款遊戲相簿化
     for extra_img in collected_covers[1:4]:
         sub_embed = DiscordEmbed(color=card_color)
         sub_embed.set_image(url=extra_img)
@@ -163,7 +169,7 @@ def main():
         articles = soup.find_all('article')
         
         if IS_TEST_MODE:
-            print("⚠️ 【測試強制推播模式】開啟！三大平台各挖出 2 篇進行網址純淨多圖測試。")
+            print("⚠️ 【測試強制推播模式】開啟！進行精準圖片分流演算法驗證。")
             steam_count, epic_count, gog_count = 0, 0, 0
             
             for article in articles[:30]: 
@@ -182,10 +188,10 @@ def main():
                     article_url = tag['href'].strip()
                     print(f"   [測試模式] 正在解析: {tag.text.strip()[:20]}...")
                     
-                    links, all_game_urls, main_img = extract_all_store_links_and_pure_images(article_url)
+                    links, widget_urls, main_img = extract_all_store_links_and_pure_images(article_url)
                     
                     if links:
-                        send_to_discord_clean_images(tag.text.strip(), links, all_game_urls, main_img)
+                        send_to_discord_clean_images(tag.text.strip(), links, widget_urls, main_img)
                         if is_steam: steam_count += 1
                         if is_epic: epic_count += 1
                         if is_gog: gog_count += 1
@@ -207,10 +213,10 @@ def main():
                         continue
                     
                     print(f"   New Article: {title[:20]}...")
-                    links, all_game_urls, main_img = extract_all_store_links_and_pure_images(article_url)
+                    links, widget_urls, main_img = extract_all_store_links_and_pure_images(article_url)
                     
                     if links:
-                        send_to_discord_clean_images(title, links, all_game_urls, main_img)
+                        send_to_discord_clean_images(title, links, widget_urls, main_img)
                         history.add(article_url)
                         count += 1
                     else:
