@@ -49,7 +49,7 @@ def extract_all_store_links(page_url, news_title=""):
             if "store.steampowered.com/app/" in href and not is_epic_news:
                 if "agecheck" not in href: found_stores.add(href)
                     
-            # 2. 處理 Epic 網址 (過濾掉登入、下載、主首頁等無效連結)
+            # 2. 處理 Epic 網址
             elif "epicgames.com" in href and not is_steam_news:
                 if "id/login" not in href and "download" not in href and "privacy" not in href:
                     if href != "https://store.epicgames.com" and href != "https://www.epicgames.com":
@@ -57,10 +57,8 @@ def extract_all_store_links(page_url, news_title=""):
                     
             # 3. 處理 GOG 網址
             elif "gog.com" in href and not is_epic_news:
-                # 🎯 核心修正：切除 ##openlogin 等錨點雜訊，並排除純登入頁面
                 if "##openlogin" in href:
                     href = href.split("##")[0].rstrip('/')
-                
                 if "account/login" not in href and href != "https://www.gog.com":
                     found_stores.add(href)
     except: 
@@ -68,7 +66,7 @@ def extract_all_store_links(page_url, news_title=""):
     return list(found_stores)
 
 def send_to_discord(title, store_links):
-    """將結果打包發送到 Discord 頻道"""
+    """將結果打包發送到 Discord 頻道（包含自動圖片生成機制）"""
     if not store_links: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -81,17 +79,37 @@ def send_to_discord(title, store_links):
     
     embed = DiscordEmbed(title=title, color=card_color)
     links_text = ""
+    steam_image_url = None
+    
     for link in store_links:
         platform = "Steam" if "steam" in link else "Epic Games" if "epic" in link else "GOG"
         links_text += f"🎮 [{platform} 直達傳送門]({link})\n"
         
+        # 🎯 魔法核心：如果連結是 Steam，把它的 AppID 拔出來，直接拼出 Steam 官方的高清膠囊封面圖網址
+        if "store.steampowered.com/app/" in link and not steam_image_url:
+            try:
+                # 網址長這樣: https://store.steampowered.com/app/123456/Game_Name
+                # 切開後拿 app/ 後面的那一節就是遊戲 ID
+                parts = link.split('/app/')
+                if len(parts) > 1:
+                    app_id = parts[1].split('/')[0]
+                    # 使用 Steam 最漂亮的 header 特大圖片網址
+                    steam_image_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
+            except:
+                pass
+        
     embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
+    
+    # 🎯 核心修正：如果成功生成了 Steam 封面圖，就把它塞進 Discord 卡片裡！
+    if steam_image_url:
+        embed.set_image(url=steam_image_url)
+        
     embed.set_timestamp()
     webhook.add_embed(embed)
     webhook.execute()
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（單一源純淨版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（視覺封面封面版）...")
     
     history = load_history()
     print(f"📋 載入歷史紀錄，目前已記憶了 {len(history)} 個網址。")
@@ -102,7 +120,6 @@ def main():
         articles = soup.find_all('article')
         
         count = 0
-        # 從舊到新比對
         for article in reversed(articles[:5]): 
             tag = article.select_one('.entry-title a, h2 a, h3 a')
             if tag:
