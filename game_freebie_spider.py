@@ -196,4 +196,40 @@ def main():
                         if is_epic: epic_count += 1
                         if is_gog: gog_count += 1
                         
-                if steam_count >= 2 and epic_count
+                if steam_count >= 2 and epic_count >= 2 and gog_count >= 2:
+                    break
+            print(f"   🎉 測試發送完畢！(Steam: {steam_count}/2, Epic: {epic_count}/2, GOG: {gog_count}/2)")
+            
+        else:
+            count = 0
+            for article in reversed(articles[:5]): 
+                tag = article.select_one('.entry-title a, h2 a, h3 a')
+                if tag:
+                    article_url = tag['href'].strip()
+                    title = tag.text.strip()
+                    
+                    if article_url in history:
+                        print(f"   Skip: {title[:20]}...")
+                        continue
+                    
+                    print(f"   New Article: {title[:20]}...")
+                    links, all_game_urls = extract_all_store_links_and_pure_images(article_url)
+                    
+                    if links:
+                        send_to_discord_clean_images(title, links, all_game_urls)
+                        history.add(article_url)
+                        count += 1
+                    else:
+                        print("   ⚠️ 無有效商店連結，標記為已讀。")
+                        history.add(article_url)
+                        
+            save_history(history)
+            print(f"   [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
+        
+    except Exception as e:
+        print(f"❌ 發生異常: {e}")
+
+    print("\n🎉 全數流程執行完畢！")
+
+if __name__ == "__main__":
+    main()
