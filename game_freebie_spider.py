@@ -35,14 +35,14 @@ def get_gog_cover_via_web(gog_url):
             soup = BeautifulSoup(res.text, 'html.parser')
             img_tag = soup.select_one('meta[property="og:image"]')
             if img_tag and img_tag.get('content'):
-                return img_tag['content']
+                return img_tag['content'].split('?')[0].strip() # 🎯 切除參數雜訊
     except: pass
     return None
 
 def extract_all_store_links_and_pure_images(page_url):
     """只抓內文的領取網址和關聯商店網址，並透過這些網址精準生圖，徹底排除側欄雜訊"""
     found_stores = set()
-    all_game_urls_in_article = set() # 儲存文章裡出現過的所有商店網址（包含延伸對比連結）
+    all_game_urls_in_article = set()
     
     try:
         time.sleep(0.5)
@@ -50,7 +50,6 @@ def extract_all_store_links_and_pure_images(page_url):
         if res.status_code != 200: return [], []
         inner_soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 🎯 只鎖定文章主體區塊，避開整個網站的側邊欄、頁尾等髒資料
         content_area = inner_soup.select_one('.entry-content') or inner_soup
 
         links = content_area.find_all('a', href=True)
@@ -61,7 +60,6 @@ def extract_all_store_links_and_pure_images(page_url):
             if "store.steampowered.com/app/" in href:
                 if "agecheck" not in href:
                     all_game_urls_in_article.add(href)
-                    # 只有在非 Epic 專場時，它才作為主要直達領取門
                     found_stores.add(href)
                     
             # B. 收集 Epic 連結
@@ -79,7 +77,7 @@ def extract_all_store_links_and_pure_images(page_url):
                     found_stores.add(href)
                     all_game_urls_in_article.add(href)
                     
-        # 🎯 檢查有沒有嵌入的 Steam Widget <iframe> 遊戲小工具大圖
+        # 檢查有沒有嵌入的 Steam Widget
         iframes = content_area.find_all('iframe', src=True)
         for iframe in iframes:
             src = iframe['src']
@@ -94,7 +92,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return list(found_stores), list(all_game_urls_in_article)
 
 def send_to_discord_clean_images(title, store_links, all_game_urls):
-    """透過嚴格篩選的網址清單，來生成 100% 精準的 Discord 多圖相簿"""
+    """透過嚴格篩選的網址清單，來生成 100% 精準的 Discord 多圖相簿（修復撞圖 Bug）"""
     if not store_links: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -104,22 +102,34 @@ def send_to_discord_clean_images(title, store_links, all_game_urls):
     links_str = "".join(store_links).lower()
     card_color = "00c0ff" if "steam" in links_str else "1a1a1a" if "epic" in links_str else "f1c40f"
     
-    # 🕵️‍♂️ 核心精準圖片生成演算法
     collected_covers = []
+    seen_steam_ids = set() # 🎯 新增：用來記憶已經抓過的 Steam 遊戲 ID
     
-    # 對文章內出現的所有關聯網址進行掃描，抓取它們的官方封面
     for game_url in all_game_urls:
         if "store.steampowered.com/app/" in game_url:
             try:
                 app_id = game_url.split('/app/')[1].split('/')[0]
+                # 🎯 如果這個 Steam 遊戲 ID 已經生過圖了，直接跳過不重複生圖
+                if app_id in seen_steam_ids: continue
+                
                 img_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
-                if img_url not in collected_covers:
-                    collected_covers.append(img_url)
+                collected_covers.append(img_url)
+                seen_steam_ids.add(app_id)
             except: pass
+            
         elif "gog.com" in game_url:
             gog_cover = get_gog_cover_via_web(game_url)
-            if gog_cover and gog_cover not in collected_covers:
-                collected_covers.append(gog_cover)
+            if gog_cover:
+                # 🎯 檢查 GOG 吐回來的圖是不是骨子裡也是 Steam 圖床
+                if "steam" in gog_cover.lower() and "/apps/" in gog_cover:
+                    try:
+                        app_id = gog_cover.split('/apps/')[1].split('/')[0]
+                        if app_id in seen_steam_ids: continue
+                        seen_steam_ids.add(app_id)
+                    except: pass
+                
+                if gog_cover not in collected_covers:
+                    collected_covers.append(gog_cover)
 
     # 建立傳送門清單文字
     links_text = ""
@@ -136,7 +146,7 @@ def send_to_discord_clean_images(title, store_links, all_game_urls):
     main_embed.set_timestamp()
     webhook.add_embed(main_embed)
     
-    # 如果有複數遊戲（例如 Epic 同時送兩款且都有附帶 Steam 網址），自動排成相簿
+    # 限制最多再塞 3 張額外圖
     for extra_img in collected_covers[1:4]:
         sub_embed = DiscordEmbed(color=card_color)
         sub_embed.set_image(url=extra_img)
@@ -178,7 +188,6 @@ def main():
                     article_url = tag['href'].strip()
                     print(f"   [測試模式] 正在解析: {tag.text.strip()[:20]}...")
                     
-                    # 🎯 這裡改回傳商店連結以及關聯網址
                     links, all_game_urls = extract_all_store_links_and_pure_images(article_url)
                     
                     if links:
@@ -187,40 +196,4 @@ def main():
                         if is_epic: epic_count += 1
                         if is_gog: gog_count += 1
                         
-                if steam_count >= 2 and epic_count >= 2 and gog_count >= 2:
-                    break
-            print(f"   🎉 測試發送完畢！(Steam: {steam_count}/2, Epic: {epic_count}/2, GOG: {gog_count}/2)")
-            
-        else:
-            count = 0
-            for article in reversed(articles[:5]): 
-                tag = article.select_one('.entry-title a, h2 a, h3 a')
-                if tag:
-                    article_url = tag['href'].strip()
-                    title = tag.text.strip()
-                    
-                    if article_url in history:
-                        print(f"   Skip: {title[:20]}...")
-                        continue
-                    
-                    print(f"   New Article: {title[:20]}...")
-                    links, all_game_urls = extract_all_store_links_and_pure_images(article_url)
-                    
-                    if links:
-                        send_to_discord_clean_images(title, links, all_game_urls)
-                        history.add(article_url)
-                        count += 1
-                    else:
-                        print("   ⚠️ 無有效商店連結，標記為已讀。")
-                        history.add(article_url)
-                        
-            save_history(history)
-            print(f"   [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
-        
-    except Exception as e:
-        print(f"❌ 發生異常: {e}")
-
-    print("\n🎉 全數流程執行完畢！")
-
-if __name__ == "__main__":
-    main()
+                if steam_count >= 2 and epic_count
