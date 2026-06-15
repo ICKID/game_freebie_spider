@@ -160,3 +160,83 @@ def main():
             title = "指定網址測試"
             try:
                 res = requests.get(SPECIFIC_TEST_URL, headers=HEADERS, timeout=10)
+                soup = BeautifulSoup(res.text, 'html.parser')
+                title = soup.find('h1').text.strip() if soup.find('h1') else "Specified Test URL"
+            except: pass
+            
+            links, widget_urls, main_img = extract_all_store_links_and_pure_images(SPECIFIC_TEST_URL)
+            if links:
+                send_to_discord_clean_images(title, links, widget_urls, main_img)
+                print("   🎉 指定網址測試成功發送！請檢查 Discord。")
+            else:
+                print("   ❌ 該網址內未偵測到任何有效的商店連結！")
+            return
+            
+        response = requests.get(URL_FREESTEAM, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        articles = soup.find_all('article')
+        
+        if IS_TEST_MODE:
+            print("⚠️ 【標準測試模式】開啟！")
+            steam_count, epic_count, gog_count = 0, 0, 0
+            
+            for article in articles[:30]: 
+                tag = article.select_one('.entry-title a, h2 a, h3 a')
+                if tag:
+                    title = tag.text.strip().lower()
+                    is_steam = "steam" in title
+                    is_epic = "epic" in title
+                    is_gog = "gog" in title
+                    
+                    if is_steam and steam_count >= 2: continue
+                    if is_epic and epic_count >= 2: continue
+                    if is_gog and gog_count >= 2: continue
+                    if not (is_steam or is_epic or is_gog): continue
+                    
+                    article_url = tag['href'].strip()
+                    print(f"   [測試模式] 正在解析: {tag.text.strip()[:20]}...")
+                    links, widget_urls, main_img = extract_all_store_links_and_pure_images(article_url)
+                    
+                    if links:
+                        send_to_discord_clean_images(tag.text.strip(), links, widget_urls, main_img)
+                        if is_steam: steam_count += 1
+                        if is_epic: epic_count += 1
+                        if is_gog: gog_count += 1
+                        
+                if steam_count >= 2 and epic_count >= 2 and gog_count >= 2:
+                    break
+            print(f"   🎉 測試發送完畢！")
+            
+        else:
+            count = 0
+            for article in reversed(articles[:5]): 
+                tag = article.select_one('.entry-title a, h2 a, h3 a')
+                if tag:
+                    article_url = tag['href'].strip()
+                    title = tag.text.strip()
+                    
+                    if article_url in history:
+                        print(f"   Skip: {title[:20]}...")
+                        continue
+                    
+                    print(f"   New Article: {title[:20]}...")
+                    links, widget_urls, main_img = extract_all_store_links_and_pure_images(article_url)
+                    
+                    if links:
+                        send_to_discord_clean_images(title, links, widget_urls, main_img)
+                        history.add(article_url)
+                        count += 1
+                    else:
+                        print("   ⚠️ 無有效商店連結，標記為已讀。")
+                        history.add(article_url)
+                        
+            save_history(history)
+            print(f"   [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
+        
+    except Exception as e:
+        print(f"❌ 發生異常: {e}")
+
+    print("\n🎉 全數流程執行完畢！")
+
+if __name__ == "__main__":
+    main()
