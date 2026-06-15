@@ -4,13 +4,18 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
-    # 🎯 核心改動：在這裡加上一個手動執行的輸入選項
     inputs:
       test_mode:
         description: '是否開啟強制推播測試模式？(勾選後將繞過記憶去重)'
         type: boolean
         required: false
         default: false
+      # 🎯 核心改動：新增一個可以手動填入 FreeSteam 文章網址的輸入框
+      test_url:
+        description: '【可選】指定測試的文章網址 (例如貼上特定的久遠文章網址)'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   run-spider:
@@ -43,6 +48,7 @@ jobs:
     - name: 執行限免爬蟲
       env:
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        # 🎯 將 GitHub 的勾選狀態變成環境變數交給 Python
         TEST_MODE: ${{ github.event.inputs.test_mode }}
+        # 🎯 將網址輸入框的內容變成環境變數傳給 Python
+        TEST_URL: ${{ github.event.inputs.test_url }}
       run: python game_freebie_spider.py
