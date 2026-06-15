@@ -39,7 +39,6 @@ def get_gog_cover_via_web(gog_url):
     return None
 
 def extract_all_store_links_and_pure_images(page_url):
-    """提取商店連結與關聯網址，並順手拿到 FreeSteam 該文章的標準首頁大圖"""
     found_stores = set()
     all_game_urls_in_article = set()
     freesteam_main_image = None
@@ -50,7 +49,7 @@ def extract_all_store_links_and_pure_images(page_url):
         if res.status_code != 200: return [], [], None
         inner_soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 🎯 抓取 FreeSteam 幫這篇文章配的精美首頁大圖（就是帶有 UPDATED! 紅色標籤的那張）
+        # 抓取 FreeSteam 新聞配的精美首頁大圖
         og_img = inner_soup.select_one('meta[property="og:image"]')
         if og_img and og_img.get('content'):
             freesteam_main_image = og_img['content'].split('?')[0].strip()
@@ -91,7 +90,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return list(found_stores), list(all_game_urls_in_article), freesteam_main_image
 
 def send_to_discord_clean_images(title, store_links, all_game_urls, freesteam_main_image):
-    """智慧圖片分流演算法：單款遊戲絕不發重複圖，多款遊戲才啟動相簿機制"""
+    """鐵腕去重演算法：只要是單一遊戲，不管是哪一國平台，一律只准出現 1 張圖！"""
     if not store_links: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -103,11 +102,11 @@ def send_to_discord_clean_images(title, store_links, all_game_urls, freesteam_ma
     
     collected_covers = []
     
-    # 🎯 優先把 FreeSteam 帶有 UPDATED! 紅色標籤的漂亮首頁圖當作第 1 張主圖
+    # 1. 優先放入 FreeSteam 幫這篇文章配的首頁精美大圖
     if freesteam_main_image:
         collected_covers.append(freesteam_main_image)
         
-    # 掃描其他关联網址，用來當作備用圖或第 2、3 款遊戲的封面
+    # 2. 依序解析文內的商店網址來生圖
     for game_url in all_game_urls:
         if "store.steampowered.com/app/" in game_url:
             try:
@@ -121,11 +120,9 @@ def send_to_discord_clean_images(title, store_links, all_game_urls, freesteam_ma
             if gog_cover and gog_cover not in collected_covers:
                 collected_covers.append(gog_cover)
 
-    # 🎯 關鍵防線：如果是 GOG 或是 Epic 專場，且點進去發現只有「單一款遊戲網址」
-    # 我們就強制『只留第 1 張 FreeSteam 自製圖』，把後面戳 API 或網頁衍生出來的同款官方圖無情拔除！
-    is_pure_steam = "steam" in links_str and "epic" not in links_str and "gog" not in links_str
-    if not is_pure_steam and len(store_links) == 1:
-        # 單款 Epic/GOG 遊戲，強行精簡為單張圖，絕不蹦出第二張
+    # 🎯【核心鐵腕防線】不分平台！只要算出來「直達領取連結」只有 1 個，就代表這只是單一遊戲文章
+    # 既然是單一款遊戲，就強制精簡到只留第 1 張大圖，其餘衍生圖片全部作廢！
+    if len(store_links) == 1:
         collected_covers = collected_covers[:1]
 
     # 建立傳送門清單文字
@@ -143,7 +140,7 @@ def send_to_discord_clean_images(title, store_links, all_game_urls, freesteam_ma
     main_embed.set_timestamp()
     webhook.add_embed(main_embed)
     
-    # 只有在真正遇到多款遊戲（清單長度 > 1）時，下面的 sub_embed 才會生效變成相簿
+    # 只有在 len(store_links) > 1（複數遊戲大放送）時，這裡才可能有第 2 張圖，才會順利觸發多圖相簿
     for extra_img in collected_covers[1:4]:
         sub_embed = DiscordEmbed(color=card_color)
         sub_embed.set_image(url=extra_img)
@@ -213,20 +210,4 @@ def main():
                     links, all_game_urls, main_img = extract_all_store_links_and_pure_images(article_url)
                     
                     if links:
-                        send_to_discord_clean_images(title, links, all_game_urls, main_img)
-                        history.add(article_url)
-                        count += 1
-                    else:
-                        print("   ⚠️ 無有效商店連結，標記為已讀。")
-                        history.add(article_url)
-                        
-            save_history(history)
-            print(f"   [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
-        
-    except Exception as e:
-        print(f"❌ 發生異常: {e}")
-
-    print("\n🎉 全數流程執行完畢！")
-
-if __name__ == "__main__":
-    main()
+                        send_to_discord_clean_images(title, links, all_game_urls,
