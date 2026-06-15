@@ -210,4 +210,20 @@ def main():
                     links, all_game_urls, main_img = extract_all_store_links_and_pure_images(article_url)
                     
                     if links:
-                        send_to_discord_clean_images(title, links, all_game_urls,
+                        send_to_discord_clean_images(title, links, all_game_urls, main_img)
+                        history.add(article_url)
+                        count += 1
+                    else:
+                        print("   ⚠️ 無有效商店連結，標記為已讀。")
+                        history.add(article_url)
+                        
+            save_history(history)
+            print(f"   [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
+        
+    except Exception as e:
+        print(f"❌ 發生異常: {e}")
+
+    print("\n🎉 全數流程執行完畢！")
+
+if __name__ == "__main__":
+    main()
