@@ -26,22 +26,23 @@ def save_history(history_set):
         for link in sorted(history_set):
             f.write(f"{link}\n")
 
-def get_gog_cover_via_api(gog_url):
+def get_gog_cover_via_web(gog_url):
+    """【GOG 100%精準拿圖】直接進網頁拔標準分享圖，絕對不會抓錯遊戲"""
     try:
-        slug = gog_url.split('/game/')[-1].split('/')[0]
-        if slug:
-            api_url = f"https://catalog.gog.com/v1/catalog?slug={slug}"
-            res = requests.get(api_url, headers=HEADERS, timeout=5)
-            if res.status_code == 200:
-                products = res.json().get('products', [])
-                if products:
-                    return products[0].get('coverHorizontal') or products[0].get('coverVertical')
+        time.sleep(0.3)
+        res = requests.get(gog_url, headers=HEADERS, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            img_tag = soup.select_one('meta[property="og:image"]')
+            if img_tag and img_tag.get('content'):
+                return img_tag['content']
     except: pass
     return None
 
-def extract_all_store_links_and_fallback_image(page_url, news_title=""):
+def extract_all_store_links_and_all_images(page_url, news_title=""):
+    """提取網址，並把內文的所有宣傳圖通通撈出來準備做成相簿"""
     found_stores = set()
-    fallback_image = None
+    article_images = []
     title_lower = news_title.lower()
     is_epic_news = "epic" in title_lower
     is_steam_news = "steam" in title_lower
@@ -49,12 +50,16 @@ def extract_all_store_links_and_fallback_image(page_url, news_title=""):
     try:
         time.sleep(0.5)
         res = requests.get(page_url, headers=HEADERS, timeout=10)
-        if res.status_code != 200: return [], None
+        if res.status_code != 200: return [], []
         inner_soup = BeautifulSoup(res.text, 'html.parser')
 
-        img_tag = inner_soup.select_one('meta[property="og:image"]') or inner_soup.select_one('.entry-content img')
-        if img_tag:
-            fallback_image = img_tag.get('content') or img_tag.get('src')
+        # 🎯 收集這篇 FreeSteam 文章內所有可能的大圖 (過濾掉 logo 或是頭像等小圖)
+        img_tags = inner_soup.find_all('img')
+        for img in img_tags:
+            src = img.get('src') or img.get('data-src') or img.get('content')
+            if src and "http" in src and not any(x in src.lower() for x in ["avatar", "logo", "gravatar", "icon"]):
+                if src not in article_images:
+                    article_images.append(src)
 
         links = inner_soup.find_all('a', href=True)
         for tag in links:
@@ -71,9 +76,10 @@ def extract_all_store_links_and_fallback_image(page_url, news_title=""):
                 if "account/login" not in href and href != "https://www.gog.com":
                     found_stores.add(href)
     except: pass
-    return list(found_stores), fallback_image
+    return list(found_stores), article_images
 
-def send_to_discord(title, store_links, fallback_image):
+def send_to_discord_multi_images(title, store_links, article_images):
+    """【相簿發送演算法】將多張圖片綁定至同一個訊息組，完美呈現複數遊戲"""
     if not store_links: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -83,34 +89,57 @@ def send_to_discord(title, store_links, fallback_image):
     links_str = "".join(store_links).lower()
     card_color = "00c0ff" if "steam" in links_str else "1a1a1a" if "epic" in links_str else "f1c40f"
     
-    embed = DiscordEmbed(title=title, color=card_color)
-    links_text = ""
-    final_image_url = None
+    # 🕵️‍♂️ 第一步：動態收集全平台的所有遊戲封面
+    collected_covers = []
     
     for link in store_links:
-        platform = "Steam" if "steam" in link else "Epic Games" if "epic" in link else "GOG"
-        links_text += f"🎮 [{platform} 直達傳送門]({link})\n"
-        
-        if "store.steampowered.com/app/" in link and not final_image_url:
+        # Steam 封面
+        if "store.steampowered.com/app/" in link:
             try:
                 parts = link.split('/app/')
                 if len(parts) > 1:
                     app_id = parts[1].split('/')[0]
-                    final_image_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
+                    collected_covers.append(f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg")
             except: pass
-        elif "gog.com" in link and not final_image_url:
-            final_image_url = get_gog_cover_via_api(link)
+        # GOG 封面 (改用 100% 精準網頁撈取法)
+        elif "gog.com" in link:
+            gog_cover = get_gog_cover_via_web(link)
+            if gog_cover: collected_covers.append(gog_cover)
+
+    # 如果是 Epic，或者上述平台沒撈滿，就把 FreeSteam 文章內的宣傳大圖也塞進去
+    for img in article_images:
+        if img not in collected_covers:
+            collected_covers.append(img)
             
-    if not final_image_url and fallback_image:
-        final_image_url = fallback_image
-        
-    embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
-    if final_image_url:
-        embed.set_image(url=final_image_url)
-        
-    embed.set_timestamp()
-    webhook.add_embed(embed)
-    webhook.execute()
+    # 去除重複圖源並過濾空值
+    collected_covers = [x for x in collected_covers if x]
+
+    # 🕵️‍♂️ 第二步：建立傳送門文字清單
+    links_text = ""
+    for link in store_links:
+        platform = "Steam" if "steam" in link else "Epic Games" if "epic" in link else "GOG"
+        links_text += f"🎮 [{platform} 直達傳送門]({link})\n"
+
+    # 🕵️‍♂️ 第三步：利用 Discord Embed Group 密技，將多圖打包發送
+    # 主卡片 (帶有文字與第一張圖)
+    main_embed = DiscordEmbed(title=title, color=card_color)
+    main_embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
+    if collected_covers:
+        main_embed.set_image(url=collected_covers[0])
+    main_embed.set_timestamp()
+    webhook.add_embed(main_embed)
+    
+    # 附屬卡片 (只帶圖片，Discord 會自動把它們縮小並排在主卡片下方，形成相簿)
+    # Discord 限制一個訊息組最多放 4 張圖，我們扣除主圖，最多再塞 3 張
+    for extra_img in collected_covers[1:4]:
+        sub_embed = DiscordEmbed(color=card_color)
+        sub_embed.set_image(url=extra_img)
+        webhook.add_embed(sub_embed)
+
+    try:
+        webhook.execute()
+    except Exception as e:
+        print(f"❌ Discord 發送失敗: {e}")
 
 def main():
     print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（全平台封面旗艦版）...")
@@ -123,47 +152,38 @@ def main():
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = soup.find_all('article')
         
-        # 🎯 核心測試邏輯：如果開啟測試模式，我們用計數器強抓三大平台各 2 個
         if IS_TEST_MODE:
-            print("⚠️ 【測試強制推播模式】開啟！將在歷史文章中各挖出 2 篇 Steam/Epic/GOG 進行圖片測試。")
+            print("⚠️ 【測試強制推播模式】開啟！將在歷史文章中各挖出 2 篇 Epic/Steam/GOG 進行多圖相簿測試。")
             steam_count, epic_count, gog_count = 0, 0, 0
             
-            # 測試模式下多搜尋一點歷史文章（前30篇），確保撈得到足夠的平台樣本
             for article in articles[:30]: 
                 tag = article.select_one('.entry-title a, h2 a, h3 a')
                 if tag:
                     title = tag.text.strip().lower()
-                    
-                    # 分流判定當前文章屬於哪個平台
                     is_steam = "steam" in title
                     is_epic = "epic" in title
                     is_gog = "gog" in title
                     
-                    # 如果該平台已經集滿 2 個，就跳過
                     if is_steam and steam_count >= 2: continue
                     if is_epic and epic_count >= 2: continue
                     if is_gog and gog_count >= 2: continue
-                    if not (is_steam or is_epic or is_gog): continue # 沒寫平台的不抓
+                    if not (is_steam or is_epic or is_gog): continue
                     
                     article_url = tag['href'].strip()
                     print(f"   [測試模式] 正在強力解析: {tag.text.strip()[:20]}...")
-                    links, fallback_img = extract_all_store_links_and_fallback_image(article_url, tag.text.strip())
+                    links, all_imgs = extract_all_store_links_and_all_images(article_url, tag.text.strip())
                     
                     if links:
-                        send_to_discord(tag.text.strip(), links, fallback_img)
-                        # 更新計數器
+                        send_to_discord_multi_images(tag.text.strip(), links, all_imgs)
                         if is_steam: steam_count += 1
                         if is_epic: epic_count += 1
                         if is_gog: gog_count += 1
                         
-                # 如果三大平台都各自集滿 2 篇，就提早收工
                 if steam_count >= 2 and epic_count >= 2 and gog_count >= 2:
                     break
-                    
             print(f"   🎉 測試發送完畢！(Steam: {steam_count}/2, Epic: {epic_count}/2, GOG: {gog_count}/2)")
             
         else:
-            # 🟢 正常自動排程模式（維持原樣，嚴格守護去重防線，不重發）
             count = 0
             for article in reversed(articles[:5]): 
                 tag = article.select_one('.entry-title a, h2 a, h3 a')
@@ -176,10 +196,10 @@ def main():
                         continue
                     
                     print(f"   New Article: {title[:20]}...")
-                    links, fallback_img = extract_all_store_links_and_fallback_image(article_url, title)
+                    links, all_imgs = extract_all_store_links_and_all_images(article_url, title)
                     
                     if links:
-                        send_to_discord(title, links, fallback_img)
+                        send_to_discord_multi_images(title, links, all_imgs)
                         history.add(article_url)
                         count += 1
                     else:
