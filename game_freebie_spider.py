@@ -102,8 +102,8 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
     from discord_webhook import DiscordWebhook, DiscordEmbed
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    # 🎯 核心改動：在這裡加上你的特定身分組 ID 進行自動標記
-    webhook.content = "<@&1516130052637589575> 發現新的限時免費遊戲囉！"
+    # 🎯 核心改動 1：刪除後面多餘字眼，只留下單純的強行 TAG 召喚身分組
+    webhook.content = "<@&1516130052637589575>"
     
     links_str = "".join(store_links).lower()
     card_color = "00c0ff" if "steam" in links_str else "1a1a1a" if "epic" in links_str else "f1c40f"
@@ -125,13 +125,17 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
+    # 建立傳送門清單文字
     links_text = ""
     for link in store_links:
         platform = "Steam" if "steam" in link else "Epic Games" if "epic" in link else "GOG"
         links_text += f"🎮 [{platform} 直達傳送門]({link})\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
-    main_embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
+    
+    # 🎯 核心改動 2：徹底拔除「🎁 領取網址」這個 Field 標題，直接把連結塞進 description 欄位
+    # 這樣一來，傳送門連結會直接、無縫地貼在遊戲新聞標題正下方，畫面最乾淨！
+    main_embed.description = links_text
     
     if collected_covers:
         main_embed.set_image(url=collected_covers[0])
