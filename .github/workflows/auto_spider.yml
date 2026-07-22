@@ -10,7 +10,6 @@ on:
         type: boolean
         required: false
         default: false
-      # 🎯 核心改動：新增一個可以手動填入 FreeSteam 文章網址的輸入框
       test_url:
         description: '【可選】指定測試的文章網址 (例如貼上特定的久遠文章網址)'
         type: string
@@ -27,13 +26,14 @@ jobs:
     - name: 複製專案代碼
       uses: actions/checkout@v4
 
-    - name: 讀取發送歷史快取
-      uses: actions/cache@v4
+    # 🎯 核心修復：修正 Cache 機制，確保每一次寫入 posted_links.txt 都能被成功儲存並傳遞到下一次！
+    - name: 恢復歷史紀錄快取
+      uses: actions/cache/restore@v4
       with:
         path: posted_links.txt
-        key: spider-history-${{ github.run_id }}
+        key: freebie-spider-history-v1
         restore-keys: |
-          spider-history-
+          freebie-spider-history-
 
     - name: 設定 Python 環境
       uses: actions/setup-python@v5
@@ -49,6 +49,13 @@ jobs:
       env:
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         TEST_MODE: ${{ github.event.inputs.test_mode }}
-        # 🎯 將網址輸入框的內容變成環境變數傳給 Python
         TEST_URL: ${{ github.event.inputs.test_url }}
       run: python game_freebie_spider.py
+
+    # 🎯 核心修復：強制將最新更新的 posted_links.txt 儲存回快取，徹底杜絕重複推播！
+    - name: 儲存最新歷史紀錄快取
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: posted_links.txt
+        key: freebie-spider-history-${{ github.run_id }}-${{ github.run_number }}
