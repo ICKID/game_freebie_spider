@@ -19,21 +19,12 @@ on:
 jobs:
   run-spider:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    permissions:
+      contents: write # 🎯 給予 Actions 權限，讓它能自動把發送紀錄提交 (Commit) 回你的 Git 倉庫
 
     steps:
     - name: 複製專案代碼
       uses: actions/checkout@v4
-
-    # 🎯 核心修復：修正 Cache 機制，確保每一次寫入 posted_links.txt 都能被成功儲存並傳遞到下一次！
-    - name: 恢復歷史紀錄快取
-      uses: actions/cache/restore@v4
-      with:
-        path: posted_links.txt
-        key: freebie-spider-history-v1
-        restore-keys: |
-          freebie-spider-history-
 
     - name: 設定 Python 環境
       uses: actions/setup-python@v5
@@ -52,10 +43,12 @@ jobs:
         TEST_URL: ${{ github.event.inputs.test_url }}
       run: python game_freebie_spider.py
 
-    # 🎯 核心修復：強制將最新更新的 posted_links.txt 儲存回快取，徹底杜絕重複推播！
-    - name: 儲存最新歷史紀錄快取
-      if: always()
-      uses: actions/cache/save@v4
-      with:
-        path: posted_links.txt
-        key: freebie-spider-history-${{ github.run_id }}-${{ github.run_number }}
+    # 🎯 核心終極防線：自動將最新的 posted_links.txt 提交並 Push 回 Github 專案中！
+    - name: 自動提交發送紀錄 (Commit & Push)
+      if: github.event.inputs.test_mode != 'true' # 只有在「正式模式」有新文章時才更新歷史紀錄，測試模式不更新
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add posted_links.txt
+        git commit -m "chore: 自動更新限免發送紀錄 [skip ci]" || echo "無新紀錄需更新"
+        git push
