@@ -23,6 +23,9 @@ def load_history():
     return set()
 
 def save_history(history_set):
+    # 🎯 如果是測試模式，不要寫入檔案，避免污染正式的發送記憶！
+    if IS_TEST_MODE:
+        return
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         for link in sorted(history_set):
             f.write(f"{link}\n")
@@ -102,7 +105,6 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
     from discord_webhook import DiscordWebhook, DiscordEmbed
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    # 🎯 核心改動：更換為充滿禪意的限免化緣廣播詞！
     webhook.content = "<@&1516130052637589575> 大德施粥！免費齋飯開倉，速來化緣！"
     
     links_str = "".join(store_links).lower()
@@ -125,7 +127,6 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 建立傳送門清單文字
     links_text = ""
     for link in store_links:
         platform = "Steam" if "steam" in link else "Epic Games" if "epic" in link else "GOG"
