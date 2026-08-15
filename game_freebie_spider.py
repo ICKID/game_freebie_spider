@@ -16,23 +16,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
-# 🚫 垃圾連結黑名單
-EXCLUDE_KEYWORDS = [
-    "/login",
-    "/signin",
-    "/download",
-    "/cart",
-    "/checkout",
-    "support.",
-    "help.",
-    "#openlogin",
-    "facebook.com",
-    "twitter.com",
-    "plurk.com",
-    "line.me",
-    "t.me"
-]
-
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return set()
@@ -45,7 +28,7 @@ def save_history(history):
             f.write(f"{url}\n")
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，並嚴格確認是否為『限時免費』"""
+    """解析單篇文章，精準抓取『領取連結:』後方的網址"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -59,9 +42,8 @@ def extract_all_store_links_and_pure_images(article_url):
             
         full_text = content_area.text
         
-        # 🎯 核心檢查：內文必須包含「限時免費」或「限免」
-        is_limited_free = "限時免費" in full_text or "限免" in full_text
-        if not is_limited_free:
+        # 1. 確認是否為「限時免費」
+        if "限時免費" not in full_text and "限免" not in full_text:
             return "", [], False
             
         main_img = ""
@@ -73,22 +55,34 @@ def extract_all_store_links_and_pure_images(article_url):
         title = title_tag.text.strip() if title_tag else "限時免費遊戲情報"
             
         links = []
+        
+        # 2. 策略：尋找內文中的「領取連結:」或「領取連結：」
         for a in content_area.select('a'):
             href = a.get('href', '').strip()
-            href_lower = href.lower()
+            # 檢查這個超連結本身，或者它的上層文字有沒有包含「領取連結」
+            parent_text = a.parent.text if a.parent else ""
             
-            if any(exclude in href_lower for exclude in EXCLUDE_KEYWORDS):
-                continue
-            if 'freesteam.games' in href_lower:
-                continue
-            if not href.startswith('http'):
-                continue
-                
-            links.append(href)
-                
+            if "領取連結" in parent_text or "領取連結" in a.text:
+                if href.startswith('http') and 'freesteam.games' not in href:
+                    links.append(href)
+                    
+        # 3. 如果透過文字找不到，退一步檢查超連結是否包含常見的領取路徑特徵
+        if not links:
+            for a in content_area.select('a'):
+                href = a.get('href', '').strip()
+                href_lower = href.lower()
+                # 排除登入、下載等共用垃圾網址
+                if any(x in href_lower for x in ['/login', '/download', '/signin', 'support.', 'help.']):
+                    continue
+                if href.startswith('http') and 'freesteam.games' not in href:
+                    links.append(href)
+                    
         links = list(dict.fromkeys(links))
-        links = links[:3] # 最多取前 3 個連結
+        links = links[:1] # 通常一篇文章只會抓一個最精準的領取主連結
         
+        if not links:
+            return "", [], False
+            
         return title, links, main_img, True
         
     except Exception as e:
@@ -104,7 +98,7 @@ def send_to_discord(title, links, main_img):
     
     desc = ""
     for i, link in enumerate(links):
-        desc += f"🔗 [點此前往領取遊戲 ({i+1})]({link})\n"
+        desc += f"🔗 [點此前往領取遊戲]({link})\n"
         
     embed = DiscordEmbed(title=title, description=desc, color="03b2f8")
     if main_img:
@@ -130,11 +124,11 @@ def main():
             title, links, main_img, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
             print(f"   標題: {title}")
             print(f"   是否符合『限時免費』: {is_valid}")
-            print(f"   抓取到的連結: {links}")
+            print(f"   精準抓取到的領取連結: {links}")
             if is_valid and links:
                 send_to_discord(title, links, main_img)
             else:
-                print("   ⚠️ 該測試網址不符合限時免費條件，或未找到有效連結！")
+                print("   ⚠️ 該測試網址不符合條件或未找到領取連結！")
         else:
             print("   ⚠️ 未提供 TEST_URL")
         return
@@ -175,13 +169,13 @@ def main():
             title, links, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
             
             if is_valid and links:
-                print(f"   ✅ 符合限時免費條件，準備發送...")
+                print(f"   ✅ 成功抓取精準領取連結，準備發送...")
                 is_success = send_to_discord(title, links, main_img)
                 if is_success:
                     history.add(article_url)
                     count += 1
             else:
-                print("   ⚠️ 該文章非『限時免費』或無有效連結，已略過。")
+                print("   ⚠️ 該文章非限時免費或無領取連結，已略過。")
                 history.add(article_url)
                 
         save_history(history)
