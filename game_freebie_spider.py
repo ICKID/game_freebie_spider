@@ -8,31 +8,26 @@ import sys
 URL_FREESTEAM = "https://freesteam.games/"
 HISTORY_FILE = "posted_links.txt"
 
-# 抓取 GitHub Actions 傳進來的環境變數
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-# 判斷是否為測試模式
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true" or "--test" in sys.argv
 
-# 偽裝成一般瀏覽器，避免被網站阻擋
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
 def load_history():
-    """讀取已經發送過的歷史網址"""
     if not os.path.exists(HISTORY_FILE):
         return set()
     with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip())
 
 def save_history(history):
-    """儲存已發送的網址到歷史紀錄"""
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         for url in history:
             f.write(f"{url}\n")
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，抓取遊戲連結與圖片"""
+    """解析單篇文章，抓取遊戲連結與圖片 (升級抗改版)"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -40,20 +35,31 @@ def extract_all_store_links_and_pure_images(article_url):
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
+        # 尋找文章主體 (兼容多種常見改版命名)，如果找不到就搜尋整頁
+        content_area = soup.select_one('.entry-content, .post-content, .post, article, main')
+        if not content_area:
+            content_area = soup 
+            
         # 抓取主要圖片
         main_img = ""
-        img_tag = soup.select_one('.entry-content img')
+        img_tag = content_area.select_one('img')
         if img_tag and img_tag.get('src'):
             main_img = img_tag['src']
             
-        # 抓取商店連結 (排除網站本身的廣告連結)
+        # 抓取商店連結 (直接抓所有外部連結，並排除社群分享按鈕)
         links = []
-        for a in soup.select('.entry-content a'):
+        for a in content_area.select('a'):
             href = a.get('href', '')
-            if href and 'freesteam.games' not in href and href.startswith('http'):
+            if (href.startswith('http') and 
+                'freesteam.games' not in href and 
+                'facebook.com' not in href and 
+                'twitter.com' not in href and 
+                'plurk.com' not in href and
+                'line.me' not in href and
+                't.me' not in href):
                 links.append(href)
                 
-        # 去除重複
+        # 去除重複連結
         links = list(dict.fromkeys(links))
         return links, [], main_img
         
@@ -62,7 +68,6 @@ def extract_all_store_links_and_pure_images(article_url):
         return [], [], ""
 
 def send_to_discord(title, links, main_img):
-    """發送訊息到 Discord，並回傳是否發送成功"""
     if not DISCORD_WEBHOOK_URL:
         return False
         
@@ -71,7 +76,7 @@ def send_to_discord(title, links, main_img):
     # 組合連結文字
     desc = ""
     for i, link in enumerate(links):
-        desc += f"🔗 [點此領取遊戲 {i+1}]({link})\n"
+        desc += f"🔗 [點此領取遊戲 / 連結 {i+1}]({link})\n"
         
     embed = DiscordEmbed(title=title, description=desc, color="03b2f8")
     if main_img:
@@ -110,7 +115,6 @@ def main():
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # --- 🚀 [防禦升級版] 拋棄 <article>，直接掃描所有可能是文章標題的連結 ---
         tags = soup.select('h2 a, h3 a, .entry-title a, .post-title a')
         
         valid_articles = []
@@ -120,7 +124,6 @@ def main():
             url = tag.get('href', '').strip()
             title = tag.text.strip()
             
-            # 嚴格過濾：必須有標題、要是本站網址、不能是分類或首頁
             if (title and url.startswith("https://freesteam.games") 
                 and url not in seen_urls 
                 and "/category/" not in url 
@@ -138,7 +141,6 @@ def main():
             return
 
         count = 0
-        # 只取最新 5 篇反向檢查
         for article in reversed(valid_articles[:5]): 
             article_url = article["url"]
             title = article["title"]
