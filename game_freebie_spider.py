@@ -142,6 +142,8 @@ def main():
         
         if not articles:
             print("⚠️ 未找到任何文章標籤，網站可能改版了。")
+            print("🔍 讓我們來看看網站到底回傳了什麼畫面 (前1000字元)：")
+            print(response.text[:1000])
             return
 
         count = 0
