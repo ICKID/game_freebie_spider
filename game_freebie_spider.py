@@ -15,6 +15,13 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
+# 🎮 嚴格對齊最初版本：只允許 Steam、Epic、GOG
+VALID_STORES = [
+    "steampowered.com",
+    "epicgames.com",
+    "gog.com"
+]
+
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return set()
@@ -27,7 +34,7 @@ def save_history(history):
             f.write(f"{url}\n")
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，抓取遊戲連結與圖片 (升級抗改版)"""
+    """解析單篇文章，只抓取 Steam, Epic, GOG 連結"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -35,31 +42,25 @@ def extract_all_store_links_and_pure_images(article_url):
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 尋找文章主體 (兼容多種常見改版命名)，如果找不到就搜尋整頁
         content_area = soup.select_one('.entry-content, .post-content, .post, article, main')
         if not content_area:
             content_area = soup 
             
-        # 抓取主要圖片
         main_img = ""
         img_tag = content_area.select_one('img')
         if img_tag and img_tag.get('src'):
             main_img = img_tag['src']
             
-        # 抓取商店連結 (直接抓所有外部連結，並排除社群分享按鈕)
         links = []
         for a in content_area.select('a'):
             href = a.get('href', '')
-            if (href.startswith('http') and 
-                'freesteam.games' not in href and 
-                'facebook.com' not in href and 
-                'twitter.com' not in href and 
-                'plurk.com' not in href and
-                'line.me' not in href and
-                't.me' not in href):
+            href_lower = href.lower()
+            
+            # 只抓取包含 steam, epic, gog 的網址
+            if any(store in href_lower for store in VALID_STORES):
                 links.append(href)
                 
-        # 去除重複連結
+        # 去除重複並保持順序
         links = list(dict.fromkeys(links))
         return links, [], main_img
         
@@ -73,10 +74,9 @@ def send_to_discord(title, links, main_img):
         
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    # 組合連結文字
     desc = ""
     for i, link in enumerate(links):
-        desc += f"🔗 [點此領取遊戲 / 連結 {i+1}]({link})\n"
+        desc += f"🔗 [點此前往領取遊戲 ({i+1})]({link})\n"
         
     embed = DiscordEmbed(title=title, description=desc, color="03b2f8")
     if main_img:
@@ -96,25 +96,14 @@ def main():
     print("🚀 GitHub Actions 智慧即時限免爬蟲啟動...")
     
     if TEST_MODE:
-        print("⚠️ 測試模式已開啟，請檢查前一次的 Log")
+        print("⚠️ 測試模式已開啟")
         return
 
-    if not DISCORD_WEBHOOK_URL:
-        print("⚠️ [警告] 未偵測到 DISCORD_WEBHOOK_URL，發送功能將無法運作！")
-
     history = load_history()
-    print(f"📜 目前已記錄的歷史文章數量: {len(history)}")
     
     try:
         response = requests.get(URL_FREESTEAM, headers=HEADERS, timeout=15)
-        print(f"📡 請求首頁 HTTP 狀態碼: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ 無法存取首頁 (HTTP {response.status_code})")
-            return
-
         soup = BeautifulSoup(response.text, 'html.parser')
-        
         tags = soup.select('h2 a, h3 a, .entry-title a, .post-title a')
         
         valid_articles = []
@@ -134,19 +123,12 @@ def main():
                 valid_articles.append({"title": title, "url": url})
                 seen_urls.add(url)
 
-        print(f"📦 成功抓取到的首頁文章數量: {len(valid_articles)}")
-        
-        if not valid_articles:
-            print("⚠️ 依然未找到文章連結，網站結構異常。")
-            return
-
         count = 0
         for article in reversed(valid_articles[:5]): 
             article_url = article["url"]
             title = article["title"]
             
             if article_url in history:
-                print(f"   [Skip 已推播過] {title[:25]}...")
                 continue
             
             print(f"\n   [發現新文章] {title[:25]}...")
@@ -158,7 +140,8 @@ def main():
                     history.add(article_url)
                     count += 1
             else:
-                print("   ⚠️ 內文無有效遊戲連結，為避免誤判，暫不寫入歷史紀錄。")
+                print("   ⚠️ 內文無 Steam/Epic/GOG 連結，跳過發送。")
+                history.add(article_url)
                 
         save_history(history)
         print(f"\n🎉 [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
