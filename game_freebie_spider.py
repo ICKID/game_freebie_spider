@@ -10,12 +10,12 @@ HISTORY_FILE = "posted_links.txt"
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true" or "--test" in sys.argv
+TEST_URL = os.environ.get("TEST_URL", "").strip()
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
-# 🎮 嚴格對齊最初版本：只允許 Steam、Epic、GOG
 VALID_STORES = [
     "steampowered.com",
     "epicgames.com",
@@ -51,25 +51,28 @@ def extract_all_store_links_and_pure_images(article_url):
         if img_tag and img_tag.get('src'):
             main_img = img_tag['src']
             
+        # 抓取文章標題
+        title_tag = soup.select_one('h1.entry-title, h1.post-title, h1')
+        title = title_tag.text.strip() if title_tag else "限免遊戲情報"
+            
         links = []
         for a in content_area.select('a'):
             href = a.get('href', '')
             href_lower = href.lower()
             
-            # 只抓取包含 steam, epic, gog 的網址
             if any(store in href_lower for store in VALID_STORES):
                 links.append(href)
                 
-        # 去除重複並保持順序
         links = list(dict.fromkeys(links))
-        return links, [], main_img
+        return title, links, main_img
         
     except Exception as e:
         print(f"   ⚠️ 解析文章失敗: {e}")
-        return [], [], ""
+        return "", [], ""
 
 def send_to_discord(title, links, main_img):
     if not DISCORD_WEBHOOK_URL:
+        print("❌ 錯誤：未設定 DISCORD_WEBHOOK_URL")
         return False
         
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
@@ -95,10 +98,23 @@ def send_to_discord(title, links, main_img):
 def main():
     print("🚀 GitHub Actions 智慧即時限免爬蟲啟動...")
     
+    # --- 🧪 測試模式處理 ---
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
+        if TEST_URL:
+            print(f"🔍 正在強制測試指定網址: {TEST_URL}")
+            title, links, main_img = extract_all_store_links_and_pure_images(TEST_URL)
+            print(f"   標題: {title}")
+            print(f"   找到的有效連結: {links}")
+            if links:
+                send_to_discord(title, links, main_img)
+            else:
+                print("   ⚠️ 該測試網址內沒有找到 Steam/Epic/GOG 連結！")
+        else:
+            print("   ⚠️ 未提供 TEST_URL")
         return
 
+    # --- 🤖 正式排程模式 ---
     history = load_history()
     
     try:
@@ -132,7 +148,7 @@ def main():
                 continue
             
             print(f"\n   [發現新文章] {title[:25]}...")
-            links, _, main_img = extract_all_store_links_and_pure_images(article_url)
+            title, links, main_img = extract_all_store_links_and_pure_images(article_url)
             
             if links:
                 is_success = send_to_discord(title, links, main_img)
