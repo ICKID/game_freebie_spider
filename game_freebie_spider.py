@@ -22,6 +22,17 @@ VALID_STORES = [
     "gog.com"
 ]
 
+EXCLUDE_KEYWORDS = [
+    "/login",
+    "/signin",
+    "/download",
+    "/cart",
+    "/checkout",
+    "support.",
+    "help.",
+    "#openlogin"
+]
+
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return set()
@@ -34,11 +45,11 @@ def save_history(history):
             f.write(f"{url}\n")
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，只抓取 Steam, Epic, GOG 連結"""
+    """解析單篇文章，精準抓取 Steam / Epic / GOG 主遊戲連結"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
-            return [], [], ""
+            return "", [], ""
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
@@ -51,17 +62,31 @@ def extract_all_store_links_and_pure_images(article_url):
         if img_tag and img_tag.get('src'):
             main_img = img_tag['src']
             
-        # 抓取文章標題
         title_tag = soup.select_one('h1.entry-title, h1.post-title, h1')
         title = title_tag.text.strip() if title_tag else "限免遊戲情報"
             
         links = []
         for a in content_area.select('a'):
-            href = a.get('href', '')
+            href = a.get('href', '').strip()
             href_lower = href.lower()
             
-            if any(store in href_lower for store in VALID_STORES):
-                links.append(href)
+            # 1. 必須符合三大平台白名單
+            if not any(store in href_lower for store in VALID_STORES):
+                continue
+                
+            # 2. 通過排除清單檢查 (不能包含 login, download, #openlogin 等字眼)
+            if any(exclude in href_lower for exclude in EXCLUDE_KEYWORDS):
+                continue
+                
+            # 3. 嚴格鎖定三大平台的「主遊戲頁面」結構
+            if "epicgames.com" in href_lower and "/p/" not in href_lower:
+                continue
+            if "steampowered.com" in href_lower and "/app/" not in href_lower:
+                continue
+            if "gog.com" in href_lower and "/game/" not in href_lower:
+                continue
+                
+            links.append(href)
                 
         links = list(dict.fromkeys(links))
         return title, links, main_img
@@ -98,23 +123,21 @@ def send_to_discord(title, links, main_img):
 def main():
     print("🚀 GitHub Actions 智慧即時限免爬蟲啟動...")
     
-    # --- 🧪 測試模式處理 ---
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
         if TEST_URL:
             print(f"🔍 正在強制測試指定網址: {TEST_URL}")
             title, links, main_img = extract_all_store_links_and_pure_images(TEST_URL)
             print(f"   標題: {title}")
-            print(f"   找到的有效連結: {links}")
+            print(f"   過濾後的有效連結: {links}")
             if links:
                 send_to_discord(title, links, main_img)
             else:
-                print("   ⚠️ 該測試網址內沒有找到 Steam/Epic/GOG 連結！")
+                print("   ⚠️ 該測試網址內沒有找到有效的遊戲主連結！")
         else:
             print("   ⚠️ 未提供 TEST_URL")
         return
 
-    # --- 🤖 正式排程模式 ---
     history = load_history()
     
     try:
@@ -156,7 +179,7 @@ def main():
                     history.add(article_url)
                     count += 1
             else:
-                print("   ⚠️ 內文無 Steam/Epic/GOG 連結，跳過發送。")
+                print("   ⚠️ 內文無有效遊戲主連結，跳過發送。")
                 history.add(article_url)
                 
         save_history(history)
