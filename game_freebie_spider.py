@@ -17,12 +17,14 @@ HEADERS = {
 }
 
 def load_history():
+    """載入已發送過的歷史紀錄檔案"""
     if not os.path.exists(HISTORY_FILE):
         return set()
     with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip())
 
 def save_history(history):
+    """將發送紀錄寫入檔案"""
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         for url in history:
             f.write(f"{url}\n")
@@ -56,29 +58,27 @@ def extract_all_store_links_and_pure_images(article_url):
             
         links = []
         
-        # 2. 策略：尋找內文中的「領取連結:」或「領取連結：」
+        # 2. 尋找內文中的「領取連結」相關超連結
         for a in content_area.select('a'):
             href = a.get('href', '').strip()
-            # 檢查這個超連結本身，或者它的上層文字有沒有包含「領取連結」
             parent_text = a.parent.text if a.parent else ""
             
             if "領取連結" in parent_text or "領取連結" in a.text:
                 if href.startswith('http') and 'freesteam.games' not in href:
                     links.append(href)
                     
-        # 3. 如果透過文字找不到，退一步檢查超連結是否包含常見的領取路徑特徵
+        # 3. 如果透過文字找不到，退一步檢查超連結
         if not links:
             for a in content_area.select('a'):
                 href = a.get('href', '').strip()
                 href_lower = href.lower()
-                # 排除登入、下載等共用垃圾網址
                 if any(x in href_lower for x in ['/login', '/download', '/signin', 'support.', 'help.']):
                     continue
                 if href.startswith('http') and 'freesteam.games' not in href:
                     links.append(href)
                     
         links = list(dict.fromkeys(links))
-        links = links[:1] # 通常一篇文章只會抓一個最精準的領取主連結
+        links = links[:1] # 取最精準的第一個領取主連結
         
         if not links:
             return "", [], False
@@ -133,7 +133,9 @@ def main():
             print("   ⚠️ 未提供 TEST_URL")
         return
 
+    # 正式排程模式：載入歷史紀錄
     history = load_history()
+    print(f"📂 已載入歷史紀錄，目前共有 {len(history)} 筆已發送網址。")
     
     try:
         response = requests.get(URL_FREESTEAM, headers=HEADERS, timeout=15)
@@ -162,22 +164,27 @@ def main():
             article_url = article["url"]
             title = article["title"]
             
+            # 如果已經在歷史紀錄中，直接跳過不重複檢查
             if article_url in history:
+                print(f"\n   [略過已發送] {title[:25]}...")
                 continue
             
-            print(f"\n   [檢查文章] {title[:25]}...")
+            print(f"\n   [檢查新文章] {title[:25]}...")
             title, links, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
             
             if is_valid and links:
                 print(f"   ✅ 成功抓取精準領取連結，準備發送...")
                 is_success = send_to_discord(title, links, main_img)
                 if is_success:
+                    # 💡 推播成功後，將網址加入歷史紀錄並儲存
                     history.add(article_url)
                     count += 1
             else:
                 print("   ⚠️ 該文章非限時免費或無領取連結，已略過。")
+                # 即使沒發送，也記錄起來避免每次排程重複解析同一篇舊文章
                 history.add(article_url)
                 
+        # 儲存最新紀錄到 posted_links.txt
         save_history(history)
         print(f"\n🎉 [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
         
