@@ -34,7 +34,7 @@ def extract_all_store_links_and_pure_images(article_url):
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
-            return "", [], False
+            return "", [], "", False
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
@@ -46,7 +46,7 @@ def extract_all_store_links_and_pure_images(article_url):
         
         # 1. 確認是否為「限時免費」
         if "限時免費" not in full_text and "限免" not in full_text:
-            return "", [], False
+            return "", [], "", False
             
         main_img = ""
         img_tag = content_area.select_one('img')
@@ -81,13 +81,13 @@ def extract_all_store_links_and_pure_images(article_url):
         links = links[:1] # 取最精準的第一個領取主連結
         
         if not links:
-            return "", [], False
+            return title, [], main_img, False
             
         return title, links, main_img, True
         
     except Exception as e:
         print(f"   ⚠️ 解析文章失敗: {e}")
-        return "", [], False
+        return "", [], "", False
 
 def send_to_discord(title, links, main_img):
     if not DISCORD_WEBHOOK_URL:
@@ -164,7 +164,6 @@ def main():
             article_url = article["url"]
             title = article["title"]
             
-            # 如果已經在歷史紀錄中，直接跳過不重複檢查
             if article_url in history:
                 print(f"\n   [略過已發送] {title[:25]}...")
                 continue
@@ -176,15 +175,12 @@ def main():
                 print(f"   ✅ 成功抓取精準領取連結，準備發送...")
                 is_success = send_to_discord(title, links, main_img)
                 if is_success:
-                    # 💡 推播成功後，將網址加入歷史紀錄並儲存
                     history.add(article_url)
                     count += 1
             else:
                 print("   ⚠️ 該文章非限時免費或無領取連結，已略過。")
-                # 即使沒發送，也記錄起來避免每次排程重複解析同一篇舊文章
                 history.add(article_url)
                 
-        # 儲存最新紀錄到 posted_links.txt
         save_history(history)
         print(f"\n🎉 [FreeSteam] 自動排程處理完畢，共推播了 {count} 則全新限免！")
         
