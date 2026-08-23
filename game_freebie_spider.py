@@ -29,8 +29,37 @@ def save_history(history_set):
         for link in sorted(history_set):
             f.write(f"{link}\n")
 
+def check_image_exists(img_url):
+    """檢查該圖片網址是否真實存在且可讀取 (回傳 200)"""
+    try:
+        response = requests.head(img_url, headers=HEADERS, timeout=5)
+        if response.status_code == 200:
+            return True
+    except:
+        pass
+    return False
+
+def get_valid_steam_image(app_id):
+    """智慧尋找有效的 Steam 圖片，若官方主圖失效則嘗試備用來源"""
+    # 1. 官方標準 Header 圖片
+    official_img = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
+    if check_image_exists(official_img):
+        return official_img
+        
+    # 2. 備用方案 A：Steam 封面的圖庫網址 (Library hero / capsule)
+    library_img = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/library_600x900.jpg"
+    if check_image_exists(library_img):
+        return library_img
+
+    # 3. 備用方案 B：SteamDB 的公開預覽圖 CDN 結構
+    steamdb_img = f"https://steamdb.info/static/appid/header/{app_id}.jpg"
+    if check_image_exists(steamdb_img):
+        return steamdb_img
+        
+    return None
+
 def extract_all_store_links_and_pure_images(page_url):
-    """精準提取商店連結、文字，並支援從錯誤的 Steam 小工具文字中抓取 ID"""
+    """精準提取商店連結、文字，並從錯誤的 Steam 小工具文字中抓取 ID"""
     found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
@@ -115,7 +144,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """完美恢復原有的文字排版與組合邏輯，並對應所有封面圖"""
+    """具備智慧圖片有效性檢測與備用源切換的發送邏輯"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -130,15 +159,17 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
     for widget_url in widget_steam_urls:
         try:
             app_id = widget_url.split('/app/')[1].split('/')[0]
-            img_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
-            if img_url not in collected_covers:
-                collected_covers.append(img_url)
+            # 🎯 透過防呆檢測機制尋找有效圖片
+            valid_img = get_valid_steam_image(app_id)
+            if valid_img and valid_img not in collected_covers:
+                collected_covers.append(valid_img)
         except: pass
         
     if not collected_covers and freesteam_main_image:
-        collected_covers.append(freesteam_main_image)
+        if check_image_exists(freesteam_main_image):
+            collected_covers.append(freesteam_main_image)
 
-    # 🎯 恢復原本正確的文字與 (遊戲本體) 組合排版邏輯
+    # 文字與 (遊戲本體) 組合排版邏輯
     processed_lines = []
     skip_next = False
     
@@ -149,7 +180,6 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
             
         current = store_items[i]
         
-        # 智慧判定：如果下一個項目的名稱是「遊戲本體」，將其組合成正確格式
         if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本體":
             next_item = store_items[i+1]
             combined_line = f"[{current['name']}]({current['link']}) ([遊戲本體]({next_item['link']}))"
@@ -181,7 +211,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（文字格式與圖片修復完美版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（圖片自動防呆檢測版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
