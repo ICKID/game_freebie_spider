@@ -29,7 +29,7 @@ def save_history(history_set):
             f.write(f"{link}\n")
 
 def extract_all_store_links_and_pure_images(page_url):
-    """精準提取商店連結與對應文字"""
+    """精準提取每一個商店連結與其對應的原始按鈕文字"""
     found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
@@ -58,6 +58,7 @@ def extract_all_store_links_and_pure_images(page_url):
                         widget_steam_urls.append(widget_url)
                 except: pass
 
+        # 抓取所有超連結，保留文章中的先後順序與個別文字
         links = content_area.find_all('a', href=True)
         seen_links = set()
         
@@ -81,12 +82,13 @@ def extract_all_store_links_and_pure_images(page_url):
                 if "account/login" not in href and href != "https://www.gog.com":
                     platform = "GOG"
 
-            if platform and href not in seen_links:
-                seen_links.add(href)
+            # 允許相同網址或多個連結獨立存在（不使用 seen_links 過濾掉文章中不同的按鈕，確保有幾個連結就抓幾個）
+            if platform:
                 all_game_urls_in_article.add(href)
                 
                 clean_name = " ".join(raw_text.split())
                 
+                # 如果文字太短或無意義，才用網址補足
                 if not clean_name or len(clean_name) <= 1 or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name:
                     try:
                         slug = href.rstrip('/').split('/')[-1]
@@ -108,7 +110,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """完美合併「遊戲本體」文字，保留完整超連結與兩行格式"""
+    """維持文章中原本的連結數量與各別行數"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -135,17 +137,9 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 智慧合併邏輯：若遇到獨立的「遊戲本體」，把它附加到前一個項目的名稱後面，並保留前一個項目的原本超連結
-    processed_items = []
-    for item in store_items:
-        if item["name"] == "遊戲本體" and processed_items:
-            # 僅修改前一項的名稱，不覆蓋其網址，這樣原本的禮包超連結就會完整保留
-            processed_items[-1]["name"] = f"{processed_items[-1]['name']} (遊戲本體)"
-        else:
-            processed_items.append(item)
-
+    # 🎯 忠於原文：有幾個超連結就逐一印出幾行，各自保有自己的文字與網址
     links_text = ""
-    for item in processed_items:
+    for item in store_items:
         game_name = item["name"]
         link = item["link"]
         links_text += f"[{game_name}]({link})\n"
@@ -171,7 +165,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（保留超連結合併版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（原始連結忠實呈現版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
