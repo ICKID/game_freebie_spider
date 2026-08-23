@@ -29,7 +29,7 @@ def save_history(history_set):
             f.write(f"{link}\n")
 
 def extract_all_store_links_and_pure_images(page_url):
-    """提取商店連結、對應的按鈕/文字名稱與封面圖"""
+    """精準提取商店連結與對應文字"""
     found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
@@ -85,17 +85,19 @@ def extract_all_store_links_and_pure_images(page_url):
                 seen_links.add(href)
                 all_game_urls_in_article.add(href)
                 
-                display_name = raw_text
-                if not display_name or len(display_name) <= 2 or "http" in display_name or "點擊" in display_name or "這裡" in display_name:
+                clean_name = " ".join(raw_text.split())
+                
+                # 如果超連結本身文字太短或無意義，嘗試從網址或前後文補足
+                if not clean_name or len(clean_name) <= 1 or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name:
                     try:
                         slug = href.rstrip('/').split('/')[-1]
-                        display_name = slug.replace('-', ' ').replace('_', ' ').title()
+                        clean_name = slug.replace('-', ' ').replace('_', ' ').title()
                     except:
-                        display_name = f"{platform} 遊戲"
+                        clean_name = f"{platform} 遊戲"
                 
                 found_stores.append({
                     "link": href,
-                    "name": display_name,
+                    "name": clean_name,
                     "platform": platform
                 })
 
@@ -107,7 +109,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """大放送專用智慧除噪發送演算法（名稱優化版）"""
+    """依照文章原始結構精準發送"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -134,20 +136,13 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 調整格式：如果名稱原本就包含「遊戲本體」或類似字眼，或是純粹想要附加，我們讓它完美包在超連結內
+    # 🎯 依照你的需求格式化：將抓到的名稱與超連結精準對應
     links_text = ""
     for item in store_items:
-        platform = item["platform"]
         game_name = item["name"]
         link = item["link"]
-        
-        # 智慧判斷：若抓到的文字單純是「遊戲本體」或太短，把它和平台結合，或是確保格式優雅
-        if game_name in ["遊戲本體", "Game"]:
-            display_str = "遊戲本體"
-        else:
-            display_str = f"{game_name} (遊戲本體)" if "遊戲本體" in game_name or "Bundle" in game_name or "禮包" in game_name else game_name
-
-        links_text += f"🎮 [{platform}] [{display_str}]({link})\n"
+        # 直接以超連結呈現文章中的文字名稱
+        links_text += f"[{game_name}]({link})\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
     main_embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
@@ -170,7 +165,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（名稱排版優化版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（精準對應版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
