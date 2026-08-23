@@ -28,7 +28,7 @@ def save_history(history):
             f.write(f"{url}\n")
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，同時抓取『領取連結』的網址以及它原本的文字"""
+    """解析單篇文章，保留網頁上的結構與所有領取連結"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -56,63 +56,57 @@ def extract_all_store_links_and_pure_images(article_url):
             
         link_items = []
         
-        # 2. 尋找內文中的「領取連結」相關超連結，並保留其顯示文字
-        for a in content_area.select('a'):
-            href = a.get('href', '').strip()
-            link_text = a.text.strip()
-            parent_text = a.parent.text if a.parent else ""
-            
-            if "領取連結" in parent_text or "領取連結" in link_text:
-                if href.startswith('http') and 'freesteam.games' not in href:
-                    # 如果超連結本身有文字且不等於「領取連結:」，就用它當顯示名稱
-                    display_text = link_text if link_text and link_text not in ["領取連結:", "領取連結：", "領取連結"] else title
-                    link_items.append({"text": display_text, "url": href})
-                    
-        # 3. 如果透過文字找不到，退一步檢查一般外網超連結
-        if not link_items:
-            for a in content_area.select('a'):
+        # 2. 依照段落/行來擷取連結，確保同一行的連結能被歸納在一起
+        # WordPress 文章通常是以 <p> 或是 <div> 區塊來分行的
+        paragraphs = content_area.select('p, li, div')
+        if not paragraphs:
+            paragraphs = [content_area]
+
+        seen_urls = set()
+        
+        for p in paragraphs:
+            row_links = []
+            for a in p.select('a'):
                 href = a.get('href', '').strip()
                 link_text = a.text.strip()
                 href_lower = href.lower()
                 
-                if any(x in href_lower for x in ['/login', '/download', '/signin', 'support.', 'help.']):
+                # 排除不相關的外部連結或登入頁面
+                if any(x in href_lower for x in ['/login', '/download', '/signin', 'support.', 'help.', 'facebook.com', 'twitter.com', 'discord.gg']):
                     continue
                 if href.startswith('http') and 'freesteam.games' not in href:
-                    display_text = link_text if link_text and len(link_text) > 3 else title
-                    link_items.append({"text": display_text, "url": href})
-                    
-        # 去除重複的網址
-        seen_urls = set()
-        unique_links = []
-        for item in link_items:
-            if item["url"] not in seen_urls:
-                seen_urls.add(item["url"])
-                unique_links.append(item)
+                    if href not in seen_urls:
+                        seen_urls.add(href)
+                        display_text = link_text if link_text and len(link_text) > 1 and link_text not in ["領取連結:", "領取連結：", "領取連結"] else "點此前往領取"
+                        row_links.append({"text": display_text, "url": href})
+            
+            if row_links:
+                link_items.append(row_links)
                 
-        unique_links = unique_links[:4] # 最多取 4 個
-        
-        if not unique_links:
+        if not link_items:
             return title, [], main_img, False
             
-        return title, unique_links, main_img, True
+        return title, link_items, main_img, True
         
     except Exception as e:
         print(f"   ⚠️ 解析文章失敗: {e}")
         return "", [], "", False
 
-def send_to_discord(title, link_items, main_img):
+def send_to_discord(title, link_rows, main_img):
     if not DISCORD_WEBHOOK_URL:
         print("❌ 錯誤：未設定 DISCORD_WEBHOOK_URL")
         return False
         
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    # 🎯 使用原本網頁上的文字來組裝 Discord 訊息
+    # 🎯 依照網頁原本的同行結構組裝 Discord 訊息
     desc = ""
-    for item in link_items:
-        link_text = item["text"]
-        link_url = item["url"]
-        desc += f"🔗 [{link_text}]({link_url})\n"
+    for row in link_rows:
+        row_str_parts = []
+        for item in row:
+            row_str_parts.append(f"🔗 [{item['text']}]({item['url']})")
+        # 如果同一行有多個連結，用空格或分隔符號串起來
+        desc += " | ".join(row_str_parts) + "\n"
         
     embed = DiscordEmbed(title=title, description=desc, color="03b2f8")
     if main_img:
@@ -129,18 +123,18 @@ def send_to_discord(title, link_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (原始文字保留版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (全連結與同行排版版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
         if TEST_URL:
             print(f"🔍 正在強制測試指定網址: {TEST_URL}")
-            title, link_items, main_img, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
+            title, link_rows, main_img, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
             print(f"   標題: {title}")
             print(f"   是否符合『限時免費』: {is_valid}")
-            print(f"   抓取到的連結與文字: {link_items}")
-            if is_valid and link_items:
-                send_to_discord(title, link_items, main_img)
+            print(f"   抓取到的連結結構: {link_rows}")
+            if is_valid and link_rows:
+                send_to_discord(title, link_rows, main_img)
             else:
                 print("   ⚠️ 該測試網址不符合條件或未找到領取連結！")
         else:
@@ -197,11 +191,11 @@ def main():
                 continue
             
             print(f"\n   [檢查新文章] {title[:25]}...")
-            title, link_items, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
+            title, link_rows, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
             
-            if is_valid and link_items:
-                print(f"   ✅ 成功抓取到 {len(link_items)} 個帶文字的領取連結，準備發送...")
-                is_success = send_to_discord(title, link_items, main_img)
+            if is_valid and link_rows:
+                print(f"   ✅ 成功抓取所有連結群組，準備發送...")
+                is_success = send_to_discord(title, link_rows, main_img)
                 if is_success:
                     history.add(article_url)
                     count += 1
