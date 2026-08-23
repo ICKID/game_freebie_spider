@@ -138,6 +138,7 @@ def extract_all_store_links_and_pure_images(page_url):
                 
                 if not clean_name or len(clean_name) <= 1 or clean_name.isdigit() or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name or "商店頁面" in clean_name:
                     if clean_name.isdigit():
+                        # 情況一：連結文字本身就是純數字 ID
                         app_id = clean_name
                         print(f"   🔍 發現純數字 ID [{app_id}]，正在向 SteamDB 查詢真實遊戲名稱...")
                         db_name = fetch_game_name_from_steamdb(app_id)
@@ -145,7 +146,15 @@ def extract_all_store_links_and_pure_images(page_url):
                     else:
                         try:
                             slug = href.rstrip('/').split('/')[-1]
-                            clean_name = slug.replace('-', ' ').replace('_', ' ').title()
+                            
+                            # 🔧 情況二：網址 slug 也是純數字（例如網址只到 /app/1234567 沒有名稱後綴）
+                            if slug.isdigit() and platform == "Steam":
+                                app_id = slug
+                                print(f"   🔍 網址無遊戲名稱 slug，偵測到純數字 App ID [{app_id}]，正在向 SteamDB 查詢...")
+                                db_name = fetch_game_name_from_steamdb(app_id)
+                                clean_name = db_name if db_name else f"Steam 限免遊戲 ({app_id})"
+                            else:
+                                clean_name = slug.replace('-', ' ').replace('_', ' ').title()
                         except:
                             clean_name = f"{platform} 遊戲"
                 
@@ -230,7 +239,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（嚴格過濾帳戶與管理頁面版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（網址 slug 數字防呆版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
