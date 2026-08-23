@@ -41,17 +41,14 @@ def check_image_exists(img_url):
 
 def get_valid_steam_image(app_id):
     """智慧尋找有效的 Steam 圖片，若官方主圖失效則嘗試備用來源"""
-    # 1. 官方標準 Header 圖片
     official_img = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
     if check_image_exists(official_img):
         return official_img
         
-    # 2. 備用方案 A：Steam 封面的圖庫網址 (Library hero / capsule)
     library_img = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/library_600x900.jpg"
     if check_image_exists(library_img):
         return library_img
 
-    # 3. 備用方案 B：SteamDB 的公開預覽圖 CDN 結構
     steamdb_img = f"https://steamdb.info/static/appid/header/{app_id}.jpg"
     if check_image_exists(steamdb_img):
         return steamdb_img
@@ -59,7 +56,7 @@ def get_valid_steam_image(app_id):
     return None
 
 def extract_all_store_links_and_pure_images(page_url):
-    """精準提取商店連結、文字，並從錯誤的 Steam 小工具文字中抓取 ID"""
+    """精準過濾無關網址（如 Galaxy、登入頁），並清楚辨識平台"""
     found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
@@ -77,7 +74,6 @@ def extract_all_store_links_and_pure_images(page_url):
 
         content_area = inner_soup.select_one('.entry-content') or inner_soup
 
-        # 策略 1：從 iframe 的 src 抓取 App ID
         iframes = content_area.find_all('iframe', src=True)
         for iframe in iframes:
             src = iframe['src']
@@ -89,7 +85,6 @@ def extract_all_store_links_and_pure_images(page_url):
                         widget_steam_urls.append(widget_url)
                 except: pass
 
-        # 策略 2：從錯誤小工具的文字 # 數字 中抓取 App ID
         page_text = content_area.get_text()
         found_ids = re.findall(r'#\s*(\d{5,7})', page_text)
         for app_id in found_ids:
@@ -103,38 +98,42 @@ def extract_all_store_links_and_pure_images(page_url):
             href = tag['href'].split('?')[0].rstrip('/')
             raw_text = tag.get_text().strip()
             
+            # 🛑 嚴格過濾：排除 GOG Galaxy、登入頁、說明頁等非遊戲商店網址
+            lower_href = href.lower()
+            if any(bad in lower_href for bad in ["galaxy", "login", "support", "privacy", "download", "u/"]):
+                continue
+            
             platform = None
             if "store.steampowered.com/app/" in href:
                 if "agecheck" not in href:
                     platform = "Steam"
             elif "epicgames.com" in href:
-                if any(bad in href for bad in ["id/login", "download", "privacy", "/login", "/u/"]):
-                    continue
                 if href in ["https://store.epicgames.com", "https://www.epicgames.com", "https://store.epicgames.com/en-US"]:
                     continue
                 platform = "Epic Games"
             elif "gog.com" in href:
-                if "##openlogin" in href:
-                    href = href.split("##")[0].rstrip('/')
-                if "account/login" not in href and href != "https://www.gog.com":
+                if href != "https://www.gog.com":
                     platform = "GOG"
 
             if platform:
                 all_game_urls_in_article.add(href)
                 clean_name = " ".join(raw_text.split())
                 
-                if not clean_name or len(clean_name) <= 1 or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name:
+                # 如果抓到的文字太短、包含無關字眼，或是抓到類似「登入」的字，改用預設名稱
+                if not clean_name or len(clean_name) <= 1 or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name or "商店頁面" in clean_name:
                     try:
                         slug = href.rstrip('/').split('/')[-1]
                         clean_name = slug.replace('-', ' ').replace('_', ' ').title()
                     except:
                         clean_name = f"{platform} 遊戲"
                 
-                found_stores.append({
-                    "link": href,
-                    "name": clean_name,
-                    "platform": platform
-                })
+                # 🎯 避免重複加入同一個網址
+                if not any(item['link'] == href for item in found_stores):
+                    found_stores.append({
+                        "link": href,
+                        "name": clean_name,
+                        "platform": platform
+                    })
 
     except: pass
     
@@ -144,7 +143,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """具備智慧圖片有效性檢測與備用源切換的發送邏輯"""
+    """在項目名稱前自動標註平台，並維持乾淨的排版"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -159,7 +158,6 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
     for widget_url in widget_steam_urls:
         try:
             app_id = widget_url.split('/app/')[1].split('/')[0]
-            # 🎯 透過防呆檢測機制尋找有效圖片
             valid_img = get_valid_steam_image(app_id)
             if valid_img and valid_img not in collected_covers:
                 collected_covers.append(valid_img)
@@ -169,7 +167,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if check_image_exists(freesteam_main_image):
             collected_covers.append(freesteam_main_image)
 
-    # 文字與 (遊戲本體) 組合排版邏輯
+    # 🎯 組合排版：自動帶入平台標籤（例如 [Steam] 遊戲名稱）
     processed_lines = []
     skip_next = False
     
@@ -179,14 +177,14 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
             continue
             
         current = store_items[i]
+        platform_label = f"[{current['platform']}] "
         
-        if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本體":
-            next_item = store_items[i+1]
-            combined_line = f"[{current['name']}]({current['link']}) ([遊戲本體]({next_item['link']}))"
-            processed_lines.append(combined_line)
-            skip_next = True
-        else:
-            processed_lines.append(f"[{current['name']}]({current['link']})")
+        if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本":
+            # 預防保險的遊戲本體合併
+            pass
+            
+        # 組合出格式：[Steam] 遊戲名稱 (網址)
+        processed_lines.append(f"{platform_label}[{current['name']}]({current['link']})")
 
     links_text = "\n".join(processed_lines) + "\n"
 
@@ -211,7 +209,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（圖片自動防呆檢測版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（平台辨識與防呆過濾版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
@@ -223,7 +221,6 @@ def main():
             
             store_items, widget_urls, main_img = extract_all_store_links_and_pure_images(TEST_URL)
             print(f"   抓到的商店項目: {store_items}")
-            print(f"   抓到的圖片來源 ID: {widget_urls}")
             
             if store_items:
                 send_to_discord_clean_images(title, store_items, widget_urls, main_img)
