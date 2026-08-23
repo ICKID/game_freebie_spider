@@ -5,7 +5,8 @@ from discord_webhook import DiscordWebhook, DiscordEmbed
 import sys
 
 # --- 設定區 ---
-URL_FREESTEAM = "https://freesteam.games/"
+# 🎯 改為直接抓取「免費遊戲」分類頁面
+URL_FREESTEAM = "https://freesteam.games/category/free-games"
 HISTORY_FILE = "posted_links.txt"
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -115,7 +116,7 @@ def send_to_discord(title, links, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (分類頁面模式)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
@@ -139,6 +140,12 @@ def main():
     
     try:
         response = requests.get(URL_FREESTEAM, headers=HEADERS, timeout=15)
+        print(f"📡 請求分類頁面 HTTP 狀態碼: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"❌ 無法存取分類頁面 (HTTP {response.status_code})")
+            return
+
         soup = BeautifulSoup(response.text, 'html.parser')
         tags = soup.select('h2 a, h3 a, .entry-title a, .post-title a')
         
@@ -158,6 +165,8 @@ def main():
                 
                 valid_articles.append({"title": title, "url": url})
                 seen_urls.add(url)
+
+        print(f"📦 從分類頁面成功抓取到的文章數量: {len(valid_articles)}")
 
         count = 0
         for article in reversed(valid_articles[:5]): 
