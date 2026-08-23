@@ -28,21 +28,9 @@ def save_history(history_set):
         for link in sorted(history_set):
             f.write(f"{link}\n")
 
-def get_gog_cover_via_web(gog_url):
-    try:
-        time.sleep(0.3)
-        res = requests.get(gog_url, headers=HEADERS, timeout=5)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            img_tag = soup.select_one('meta[property="og:image"]')
-            if img_tag and img_tag.get('content'):
-                return img_tag['content'].split('?')[0].strip()
-    except: pass
-    return None
-
 def extract_all_store_links_and_pure_images(page_url):
-    """提取商店連結與關聯網址，並分別撈出首頁圖與 Steam 小工具圖"""
-    found_stores = set()
+    """提取商店連結、對應的按鈕/文字名稱與封面圖"""
+    found_stores = []  # 改用串列來保留順序與文字配對：[(link, name, platform), ...]
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
     freesteam_main_image = None
@@ -53,14 +41,12 @@ def extract_all_store_links_and_pure_images(page_url):
         if res.status_code != 200: return [], [], None
         inner_soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 抓取 FreeSteam 新聞配的精美首頁大圖
         og_img = inner_soup.select_one('meta[property="og:image"]')
         if og_img and og_img.get('content'):
             freesteam_main_image = og_img['content'].split('?')[0].strip()
 
         content_area = inner_soup.select_one('.entry-content') or inner_soup
 
-        # 🎯 優先檢查內文有沒有嵌入的 Steam Widget <iframe> 遊戲小工具
         iframes = content_area.find_all('iframe', src=True)
         for iframe in iframes:
             src = iframe['src']
@@ -73,50 +59,69 @@ def extract_all_store_links_and_pure_images(page_url):
                 except: pass
 
         links = content_area.find_all('a', href=True)
+        seen_links = set()
+        
         for tag in links:
             href = tag['href'].split('?')[0].rstrip('/')
+            raw_text = tag.get_text().strip()
             
+            platform = None
             if "store.steampowered.com/app/" in href:
                 if "agecheck" not in href:
-                    all_game_urls_in_article.add(href)
-                    found_stores.add(href)
+                    platform = "Steam"
             elif "epicgames.com" in href:
-                # 🎯 嚴格過濾登入、下載、隱私權及主網頁，確保抓到的是正確的遊戲/組合包領取頁
                 if any(bad in href for bad in ["id/login", "download", "privacy", "/login", "/u/"]):
                     continue
                 if href in ["https://store.epicgames.com", "https://www.epicgames.com", "https://store.epicgames.com/en-US"]:
                     continue
-                found_stores.add(href)
-                all_game_urls_in_article.add(href)
+                platform = "Epic Games"
             elif "gog.com" in href:
                 if "##openlogin" in href:
                     href = href.split("##")[0].rstrip('/')
                 if "account/login" not in href and href != "https://www.gog.com":
-                    found_stores.add(href)
-                    all_game_urls_in_article.add(href)
+                    platform = "GOG"
+
+            if platform and href not in seen_links:
+                seen_links.add(href)
+                all_game_urls_in_article.add(href)
+                
+                # 🎯 智慧判定該連結的顯示名稱：優先使用網頁上按鈕/文字，若文字太短或只是網址，則從標題或網址萃取
+                display_name = raw_text
+                if not display_name or len(display_name) <= 2 or "http" in display_name or "點擊" in display_name or "這裡" in display_name:
+                    # 試著從網址最後一段漂亮的呈現
+                    try:
+                        slug = href.rstrip('/').split('/')[-1]
+                        display_name = slug.replace('-', ' ').replace('_', ' ').title()
+                    except:
+                        display_name = f"{platform} 遊戲本體"
+                
+                found_stores.append({
+                    "link": href,
+                    "name": display_name,
+                    "platform": platform
+                })
 
     except: pass
     
-    # 🎯 如果沒撈到 iframe Widget，就把一般的 steam 網址遞補進去當作生圖圖源
     if not widget_steam_urls:
         widget_steam_urls = [x for x in all_game_urls_in_article if "store.steampowered.com" in x]
         
-    return list(found_stores), widget_steam_urls, freesteam_main_image
+    return found_stores, widget_steam_urls, freesteam_main_image
 
-def send_to_discord_clean_images(title, store_links, widget_steam_urls, freesteam_main_image):
-    """大放送專用智慧除噪發送演算法（完美修復遊戲本體與平台顯示名稱）"""
-    if not store_links: return
+def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
+    """大放送專用智慧除噪發送演算法（精準名稱對應版）"""
+    if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
     from discord_webhook import DiscordWebhook, DiscordEmbed
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    links_str = "".join(store_links).lower()
+    links_str = "".join([item["link"] for item in store_items]).lower()
     card_color = "00c0ff" if "steam" in links_str else "1a1a1a" if "epic" in links_str else "f1c40f"
     
     collected_covers = []
     
-    if len(store_links) == 1:
+    if len(store_items) == 1:
         if freesteam_main_image:
             collected_covers.append(freesteam_main_image)
     else:
@@ -131,20 +136,13 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 核心修復：精準從網址與網頁標題推導出對應的遊戲本體名稱與平台
+    # 🎯 逐行生成：平台 + 精準對應的遊戲本體名稱
     links_text = ""
-    for link in store_links:
-        if "steam" in link:
-            platform = "Steam"
-        elif "epicgames" in link:
-            platform = "Epic Games"
-        elif "gog" in link:
-            platform = "GOG"
-        else:
-            platform = "遊戲商店"
-            
-        # 嘗試從文章標題或網址帶出更具識別性的名字，若無法則顯示平台直達傳送門
-        links_text += f"🎮 [{platform} 直達傳送門]({link})\n"
+    for item in store_items:
+        platform = item["platform"]
+        game_name = item["name"]
+        link = item["link"]
+        links_text += f"🎮 [{platform}] [{game_name}]({link})\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
     main_embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
@@ -167,7 +165,7 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（完整修復版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（精準名稱對應版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
@@ -177,12 +175,11 @@ def main():
             title_tag = soup.select_one('h1.entry-title, h1')
             title = title_tag.text.strip() if title_tag else "測試限免遊戲"
             
-            links, widget_urls, main_img = extract_all_store_links_and_pure_images(TEST_URL)
-            print(f"   抓到的商店連結: {links}")
-            print(f"   抓到的 Widget Steam 網址: {widget_urls}")
+            store_items, widget_urls, main_img = extract_all_store_links_and_pure_images(TEST_URL)
+            print(f"   抓到的商店項目: {store_items}")
             
-            if links:
-                send_to_discord_clean_images(title, links, widget_urls, main_img)
+            if store_items:
+                send_to_discord_clean_images(title, store_items, widget_urls, main_img)
             else:
                 print("   ⚠️ 該測試網址未抓取到任何有效商店連結！")
         except Exception as e:
@@ -209,10 +206,10 @@ def main():
                     continue
                 
                 print(f"   New Article: {title[:20]}...")
-                links, widget_urls, main_img = extract_all_store_links_and_pure_images(article_url)
+                store_items, widget_urls, main_img = extract_all_store_links_and_pure_images(article_url)
                 
-                if links:
-                    send_to_discord_clean_images(title, links, widget_urls, main_img)
+                if store_items:
+                    send_to_discord_clean_images(title, store_items, widget_urls, main_img)
                     history.add(article_url)
                     count += 1
                 else:
