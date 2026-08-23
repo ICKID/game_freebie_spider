@@ -17,14 +17,12 @@ HEADERS = {
 }
 
 def load_history():
-    """載入已發送過的歷史紀錄檔案"""
     if not os.path.exists(HISTORY_FILE):
         return set()
     with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip())
 
 def save_history(history):
-    """將發送紀錄寫入檔案"""
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         for url in history:
             f.write(f"{url}\n")
@@ -78,7 +76,7 @@ def extract_all_store_links_and_pure_images(article_url):
                     links.append(href)
                     
         links = list(dict.fromkeys(links))
-        links = links[:1] # 取最精準的第一個領取主連結
+        links = links[:1] 
         
         if not links:
             return title, [], main_img, False
@@ -115,7 +113,7 @@ def send_to_discord(title, links, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (嚴格分類鎖定模式)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (排除側欄干擾版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
@@ -145,7 +143,17 @@ def main():
             return
 
         soup = BeautifulSoup(response.text, 'html.parser')
-        tags = soup.select('h2 a, h3 a, .entry-title a, .post-title a')
+        
+        # 🎯 關鍵修正：只在「文章列表主區域 (archive/main)」裡面找標題連結，徹底避開右側欄！
+        main_container = soup.select_one('main, #primary, .site-main, .ast-container')
+        if not main_container:
+            main_container = soup
+            
+        # 排除側欄 (.sidebar, aside) 裡面的標題
+        for aside in main_container.select('aside, .sidebar'):
+            aside.decompose()
+            
+        tags = main_container.select('h2 a, h3 a, .entry-title a, .post-title a')
         
         valid_articles = []
         seen_urls = set()
@@ -154,10 +162,9 @@ def main():
             url = tag.get('href', '').strip()
             title = tag.text.strip()
             
-            # 🎯 關鍵修正：確保抓到的文章網址確實屬於 free-games 分類，且排除分頁與標籤
-            if (title and url.startswith("https://freesteam.games/") 
-                and "/category/free-games" not in url  # 避免抓到分類本體連結
+            if (title and url.startswith("https://freesteam.games") 
                 and url not in seen_urls 
+                and "/category/" not in url 
                 and "/page/" not in url 
                 and "/tag/" not in url
                 and url != "https://freesteam.games/"):
@@ -165,15 +172,14 @@ def main():
                 valid_articles.append({"title": title, "url": url})
                 seen_urls.add(url)
 
-        print(f"📦 從分類頁面成功過濾出的文章數量: {len(valid_articles)}")
+        print(f"📦 從分類頁面主區域成功抓取到的文章數量: {len(valid_articles)}")
 
         count = 0
-        for article in reversed(valid_articles[:5]): 
+        for article in reversed(valid_articles[:10]): # 稍微放寬到前 10 篇
             article_url = article["url"]
             title = article["title"]
             
             if article_url in history:
-                print(f"\n   [略過已發送] {title[:25]}...")
                 continue
             
             print(f"\n   [檢查新文章] {title[:25]}...")
