@@ -30,7 +30,7 @@ def save_history(history_set):
 
 def extract_all_store_links_and_pure_images(page_url):
     """提取商店連結、對應的按鈕/文字名稱與封面圖"""
-    found_stores = []  # 改用串列來保留順序與文字配對：[(link, name, platform), ...]
+    found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
     freesteam_main_image = None
@@ -85,15 +85,13 @@ def extract_all_store_links_and_pure_images(page_url):
                 seen_links.add(href)
                 all_game_urls_in_article.add(href)
                 
-                # 🎯 智慧判定該連結的顯示名稱：優先使用網頁上按鈕/文字，若文字太短或只是網址，則從標題或網址萃取
                 display_name = raw_text
                 if not display_name or len(display_name) <= 2 or "http" in display_name or "點擊" in display_name or "這裡" in display_name:
-                    # 試著從網址最後一段漂亮的呈現
                     try:
                         slug = href.rstrip('/').split('/')[-1]
                         display_name = slug.replace('-', ' ').replace('_', ' ').title()
                     except:
-                        display_name = f"{platform} 遊戲本體"
+                        display_name = f"{platform} 遊戲"
                 
                 found_stores.append({
                     "link": href,
@@ -109,7 +107,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """大放送專用智慧除噪發送演算法（精準名稱對應版）"""
+    """大放送專用智慧除噪發送演算法（名稱優化版）"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -136,13 +134,20 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 逐行生成：平台 + 精準對應的遊戲本體名稱
+    # 🎯 調整格式：如果名稱原本就包含「遊戲本體」或類似字眼，或是純粹想要附加，我們讓它完美包在超連結內
     links_text = ""
     for item in store_items:
         platform = item["platform"]
         game_name = item["name"]
         link = item["link"]
-        links_text += f"🎮 [{platform}] [{game_name}]({link})\n"
+        
+        # 智慧判斷：若抓到的文字單純是「遊戲本體」或太短，把它和平台結合，或是確保格式優雅
+        if game_name in ["遊戲本體", "Game"]:
+            display_str = "遊戲本體"
+        else:
+            display_str = f"{game_name} (遊戲本體)" if "遊戲本體" in game_name or "Bundle" in game_name or "禮包" in game_name else game_name
+
+        links_text += f"🎮 [{platform}] [{display_str}]({link})\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
     main_embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
@@ -165,7 +170,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（精準名稱對應版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（名稱排版優化版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
