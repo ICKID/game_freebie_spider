@@ -29,7 +29,7 @@ def save_history(history_set):
             f.write(f"{link}\n")
 
 def extract_all_store_links_and_pure_images(page_url):
-    """精準提取每一個商店連結與其對應的原始按鈕文字"""
+    """精準提取商店連結、對應文字，並強化 Steam 錯誤小工具的 ID 抓取"""
     found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
@@ -47,6 +47,7 @@ def extract_all_store_links_and_pure_images(page_url):
 
         content_area = inner_soup.select_one('.entry-content') or inner_soup
 
+        # 🎯 強化 Steam 小工具解析：不管是正常或是顯示錯誤的 iframe，只要有 widget 就把 AppID 抓出來
         iframes = content_area.find_all('iframe', src=True)
         for iframe in iframes:
             src = iframe['src']
@@ -105,7 +106,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """智慧將獨立的「遊戲本體」合併到同一行，維持兩行正確呈現"""
+    """智慧發送與圖片組合"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -132,9 +133,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 核心排版邏輯：
-    # 如果抓到的項目裡有「遊戲本體」，把它與前一個禮包合併在同一行顯示：
-    # 例如：[阿爾比恩Online史詩法師禮包](網址B) ([遊戲本體](網址C)) 或是直接把文字串在一起
+    # 兩行排版與遊戲本體合併邏輯
     processed_lines = []
     skip_next = False
     
@@ -145,13 +144,11 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
             
         current = store_items[i]
         
-        # 檢查下一個項目是不是「遊戲本體」
         if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本體":
             next_item = store_items[i+1]
-            # 結合成同一行：禮包帶超連結，後面接一個帶超連結的 (遊戲本體)
             combined_line = f"[{current['name']}]({current['link']}) ([遊戲本體]({next_item['link']}))"
             processed_lines.append(combined_line)
-            skip_next = True  # 跳過下一個迴圈，因為已經合進來了
+            skip_next = True
         else:
             processed_lines.append(f"[{current['name']}]({current['link']})")
 
@@ -178,7 +175,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（兩行完美對應版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（Steam 錯誤小工具圖片支援版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
@@ -190,6 +187,7 @@ def main():
             
             store_items, widget_urls, main_img = extract_all_store_links_and_pure_images(TEST_URL)
             print(f"   抓到的商店項目: {store_items}")
+            print(f"   抓到的 Steam 圖片 ID 來源: {widget_urls}")
             
             if store_items:
                 send_to_discord_clean_images(title, store_items, widget_urls, main_img)
