@@ -30,7 +30,7 @@ def save_history(history_set):
             f.write(f"{link}\n")
 
 def extract_all_store_links_and_pure_images(page_url):
-    """強力提取所有商店連結、主圖，並從錯誤的小工具文字中抓取 Steam App ID"""
+    """精準提取商店連結、文字，並支援從錯誤的 Steam 小工具文字中抓取 ID"""
     found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
@@ -48,7 +48,7 @@ def extract_all_store_links_and_pure_images(page_url):
 
         content_area = inner_soup.select_one('.entry-content') or inner_soup
 
-        # 🎯 策略 1：從 iframe 的 src 抓取 App ID
+        # 策略 1：從 iframe 的 src 抓取 App ID
         iframes = content_area.find_all('iframe', src=True)
         for iframe in iframes:
             src = iframe['src']
@@ -60,7 +60,7 @@ def extract_all_store_links_and_pure_images(page_url):
                         widget_steam_urls.append(widget_url)
                 except: pass
 
-        # 🎯 策略 2：如果小工具顯示錯誤，直接從內文文字的 `# 數字`（例如 # 4261710）抓取 App ID
+        # 策略 2：從錯誤小工具的文字 # 數字 中抓取 App ID
         page_text = content_area.get_text()
         found_ids = re.findall(r'#\s*(\d{5,7})', page_text)
         for app_id in found_ids:
@@ -68,7 +68,6 @@ def extract_all_store_links_and_pure_images(page_url):
             if widget_url not in widget_steam_urls:
                 widget_steam_urls.append(widget_url)
 
-        # 抓取所有文章中的商店超連結
         links = content_area.find_all('a', href=True)
         
         for tag in links:
@@ -116,7 +115,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """忠於原文：有幾個獨立超連結就顯示幾行，並完美帶入多張封面圖"""
+    """完美恢復原有的文字排版與組合邏輯，並對應所有封面圖"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -128,7 +127,6 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
     
     collected_covers = []
     
-    # 收集所有抓到的 Steam 圖片
     for widget_url in widget_steam_urls:
         try:
             app_id = widget_url.split('/app/')[1].split('/')[0]
@@ -140,10 +138,27 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
     if not collected_covers and freesteam_main_image:
         collected_covers.append(freesteam_main_image)
 
-    # 🎯 忠於原文：直接逐行輸出每一個抓到的超連結與名稱，不隨意合併
-    links_text = ""
-    for item in store_items:
-        links_text += f"[{item['name']}]({item['link']})\n"
+    # 🎯 恢復原本正確的文字與 (遊戲本體) 組合排版邏輯
+    processed_lines = []
+    skip_next = False
+    
+    for i in range(len(store_items)):
+        if skip_next:
+            skip_next = False
+            continue
+            
+        current = store_items[i]
+        
+        # 智慧判定：如果下一個項目的名稱是「遊戲本體」，將其組合成正確格式
+        if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本體":
+            next_item = store_items[i+1]
+            combined_line = f"[{current['name']}]({current['link']}) ([遊戲本體]({next_item['link']}))"
+            processed_lines.append(combined_line)
+            skip_next = True
+        else:
+            processed_lines.append(f"[{current['name']}]({current['link']})")
+
+    links_text = "\n".join(processed_lines) + "\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
     main_embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
@@ -166,7 +181,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（圖片與行數完美修正版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（文字格式與圖片修復完美版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
