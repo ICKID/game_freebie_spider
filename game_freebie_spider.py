@@ -87,7 +87,6 @@ def extract_all_store_links_and_pure_images(page_url):
                 
                 clean_name = " ".join(raw_text.split())
                 
-                # 如果超連結本身文字太短或無意義，嘗試從網址或前後文補足
                 if not clean_name or len(clean_name) <= 1 or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name:
                     try:
                         slug = href.rstrip('/').split('/')[-1]
@@ -109,7 +108,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """依照文章原始結構精準發送"""
+    """將獨立的「遊戲本體」智慧合並到前一項的括號中"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -136,12 +135,21 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 依照你的需求格式化：將抓到的名稱與超連結精準對應
-    links_text = ""
+    # 🎯 智慧處理：如果遇到單獨的「遊戲本體」，把它跟前一項合併
+    processed_items = []
     for item in store_items:
+        if item["name"] == "遊戲本體" and processed_items:
+            # 把原本的前一項拿出來修改，把連結改成指向「遊戲本體」的網址，名稱加上 (遊戲本體)
+            prev_item = processed_items[-1]
+            prev_item["name"] = f"{prev_item['name']} (遊戲本體)"
+            prev_item["link"] = item["link"]  # 讓超連結對應到遊戲本體的網址
+        else:
+            processed_items.append(item)
+
+    links_text = ""
+    for item in processed_items:
         game_name = item["name"]
         link = item["link"]
-        # 直接以超連結呈現文章中的文字名稱
         links_text += f"[{game_name}]({link})\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
@@ -165,7 +173,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（精準對應版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（遊戲本體完美合併版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
