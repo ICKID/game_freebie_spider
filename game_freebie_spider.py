@@ -5,7 +5,6 @@ from discord_webhook import DiscordWebhook, DiscordEmbed
 import sys
 
 # --- 設定區 ---
-# 🎯 改為直接抓取「免費遊戲」分類頁面
 URL_FREESTEAM = "https://freesteam.games/category/free-games"
 HISTORY_FILE = "posted_links.txt"
 
@@ -116,7 +115,7 @@ def send_to_discord(title, links, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (分類頁面模式)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (嚴格分類鎖定模式)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
@@ -134,7 +133,6 @@ def main():
             print("   ⚠️ 未提供 TEST_URL")
         return
 
-    # 正式排程模式：載入歷史紀錄
     history = load_history()
     print(f"📂 已載入歷史紀錄，目前共有 {len(history)} 筆已發送網址。")
     
@@ -156,9 +154,10 @@ def main():
             url = tag.get('href', '').strip()
             title = tag.text.strip()
             
-            if (title and url.startswith("https://freesteam.games") 
+            # 🎯 關鍵修正：確保抓到的文章網址確實屬於 free-games 分類，且排除分頁與標籤
+            if (title and url.startswith("https://freesteam.games/") 
+                and "/category/free-games" not in url  # 避免抓到分類本體連結
                 and url not in seen_urls 
-                and "/category/" not in url 
                 and "/page/" not in url 
                 and "/tag/" not in url
                 and url != "https://freesteam.games/"):
@@ -166,7 +165,7 @@ def main():
                 valid_articles.append({"title": title, "url": url})
                 seen_urls.add(url)
 
-        print(f"📦 從分類頁面成功抓取到的文章數量: {len(valid_articles)}")
+        print(f"📦 從分類頁面成功過濾出的文章數量: {len(valid_articles)}")
 
         count = 0
         for article in reversed(valid_articles[:5]): 
