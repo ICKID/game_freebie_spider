@@ -19,7 +19,6 @@ HEADERS = {
 
 BASE_GAME_KEYWORDS = ["遊戲本體", "主遊戲", "base game", "本體", "steam頁面"]
 
-# 允許的遊戲商店網域（確保只抓真正能領遊戲的商店）
 ALLOWED_STORE_DOMAINS = [
     "store.steampowered.com",
     "gog.com",
@@ -47,29 +46,37 @@ def is_base_game_text(text):
     return any(keyword in clean_text for keyword in BASE_GAME_KEYWORDS)
 
 def get_store_display_name(url, original_text, article_title):
-    """智慧判斷商店顯示名稱"""
+    """智慧判斷商店顯示名稱：如果沒有文字，自動賦予預設名稱"""
     url_lower = url.lower()
+    clean_orig_text = original_text.strip() if original_text else ""
     
-    # 如果原始文字夠長且不是泛用詞，優先使用原始文字
-    if original_text and len(original_text) > 2 and not any(k in original_text for k in ["登入", "點此", "連結", "這裡", "Login", "sign"]):
-        return original_text
+    # 1. 如果原始超連結文字有內容，且不是純網址、不是登入字眼，就優先使用
+    if clean_orig_text and not clean_orig_text.startswith("http") and not any(k in clean_orig_text for k in ["登入", "點此", "連結", "這裡", "Login", "sign"]):
+        return clean_orig_text
         
-    # 依據網址判斷屬於哪個平台
+    # 2. 如果沒有自訂文字，根據網址平台與文章標題來智慧組合
+    game_name = article_title.replace("限時免費領取", "").replace("《", "").replace("》", "").strip()
+    
     if "steampowered.com" in url_lower:
-        if "app/" in url_lower:
-            return article_title.replace("限時免費領取", "").replace("《", "").replace("》", "").strip()
+        if game_name and len(game_name) > 2:
+            return game_name
         return "Steam 商店"
     elif "gog.com" in url_lower:
+        if game_name and len(game_name) > 2:
+            return f"{game_name} (GOG)"
         return "GOG 商店"
     elif "epicgames.com" in url_lower:
+        if game_name and len(game_name) > 2:
+            return f"{game_name} (Epic)"
         return "Epic Games 商店"
     elif "itch.io" in url_lower:
         return "Itch.io 商店"
         
-    return article_title if article_title else "點此前往領取"
+    # 3. 最終備用
+    return game_name if game_name else "點此前往領取遊戲"
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，嚴格過濾登入連結與雜訊"""
+    """解析單篇文章，確保所有連結都有漂亮的顯示名稱"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -102,7 +109,6 @@ def extract_all_store_links_and_pure_images(article_url):
             link_text = a.text.strip()
             href_lower = href.lower()
             
-            # 嚴格黑名單：排除登入、註冊、登出、幫助、社交媒體等非商店連結
             black_keywords = [
                 '/login', '/signin', '/signup', '/register', '/logout', 
                 'support.', 'help.', 'facebook.com', 'twitter.com', 
@@ -111,7 +117,6 @@ def extract_all_store_links_and_pure_images(article_url):
             if any(x in href_lower for x in black_keywords):
                 continue
             
-            # 檢查是否為支援的商店網域
             is_valid_store = any(domain in href_lower for domain in ALLOWED_STORE_DOMAINS)
             
             if href.startswith('http') and is_valid_store:
@@ -122,7 +127,6 @@ def extract_all_store_links_and_pure_images(article_url):
         if not raw_links:
             return article_title, [], main_img, False
 
-        # 智慧語義與配對處理
         formatted_items = []
         used_indices = set()
 
@@ -157,7 +161,6 @@ def extract_all_store_links_and_pure_images(article_url):
                 })
                 used_indices.add(i)
             else:
-                # 獨立本體處理
                 formatted_items.append({
                     "title": f"{article_title} (遊戲本體)",
                     "url": current_url,
@@ -205,7 +208,7 @@ def send_to_discord(title, formatted_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (商店白名單過濾版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (預設名稱補全版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
@@ -276,7 +279,7 @@ def main():
             title, formatted_items, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
             
             if is_valid and formatted_items:
-                print(f"   ✅ 成功抓取並過濾 {len(formatted_items)} 組商店連結，準備發送...")
+                print(f"   ✅ 成功抓取並排版 {len(formatted_items)} 組連結，準備發送...")
                 is_success = send_to_discord(title, formatted_items, main_img)
                 if is_success:
                     history.add(article_url)
