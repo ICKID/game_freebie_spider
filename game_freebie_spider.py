@@ -53,12 +53,14 @@ def extract_all_store_links_and_pure_images(page_url):
         if res.status_code != 200: return [], [], None
         inner_soup = BeautifulSoup(res.text, 'html.parser')
 
+        # 抓取 FreeSteam 新聞配的精美首頁大圖
         og_img = inner_soup.select_one('meta[property="og:image"]')
         if og_img and og_img.get('content'):
             freesteam_main_image = og_img['content'].split('?')[0].strip()
 
         content_area = inner_soup.select_one('.entry-content') or inner_soup
 
+        # 🎯 優先檢查內文有沒有嵌入的 Steam Widget <iframe> 遊戲小工具
         iframes = content_area.find_all('iframe', src=True)
         for iframe in iframes:
             src = iframe['src']
@@ -79,10 +81,13 @@ def extract_all_store_links_and_pure_images(page_url):
                     all_game_urls_in_article.add(href)
                     found_stores.add(href)
             elif "epicgames.com" in href:
-                if "id/login" not in href and "download" not in href and "privacy" not in href:
-                    if href != "https://store.epicgames.com" and href != "https://www.epicgames.com":
-                        found_stores.add(href)
-                        all_game_urls_in_article.add(href)
+                # 🎯 嚴格過濾登入、下載、隱私權及主網頁，確保抓到的是正確的遊戲/組合包領取頁
+                if any(bad in href for bad in ["id/login", "download", "privacy", "/login", "/u/"]):
+                    continue
+                if href in ["https://store.epicgames.com", "https://www.epicgames.com", "https://store.epicgames.com/en-US"]:
+                    continue
+                found_stores.add(href)
+                all_game_urls_in_article.add(href)
             elif "gog.com" in href:
                 if "##openlogin" in href:
                     href = href.split("##")[0].rstrip('/')
@@ -92,13 +97,14 @@ def extract_all_store_links_and_pure_images(page_url):
 
     except: pass
     
+    # 🎯 如果沒撈到 iframe Widget，就把一般的 steam 網址遞補進去當作生圖圖源
     if not widget_steam_urls:
         widget_steam_urls = [x for x in all_game_urls_in_article if "store.steampowered.com" in x]
         
     return list(found_stores), widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_links, widget_steam_urls, freesteam_main_image):
-    """大放送專用智慧除噪發送演算法（多圖相簿強化版）"""
+    """大放送專用智慧除噪發送演算法（完美修復遊戲本體與平台顯示名稱）"""
     if not store_links: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -125,9 +131,19 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
+    # 🎯 核心修復：精準從網址與網頁標題推導出對應的遊戲本體名稱與平台
     links_text = ""
     for link in store_links:
-        platform = "Steam" if "steam" in link else "Epic Games" if "epic" in link else "GOG"
+        if "steam" in link:
+            platform = "Steam"
+        elif "epicgames" in link:
+            platform = "Epic Games"
+        elif "gog" in link:
+            platform = "GOG"
+        else:
+            platform = "遊戲商店"
+            
+        # 嘗試從文章標題或網址帶出更具識別性的名字，若無法則顯示平台直達傳送門
         links_text += f"🎮 [{platform} 直達傳送門]({link})\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
@@ -151,9 +167,8 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（測試網址修正版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（完整修復版）...")
     
-    # 🎯 這裡改用修正後的 IS_TEST_MODE 變數
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
         try:
