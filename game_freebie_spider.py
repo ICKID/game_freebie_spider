@@ -50,21 +50,17 @@ def get_store_display_name(url, original_text, article_title):
     url_lower = url.lower()
     clean_orig_text = original_text.strip() if original_text else ""
     
-    # 1. 如果原始超連結文字有意義，優先使用
     if clean_orig_text and not clean_orig_text.startswith("http") and not any(k in clean_orig_text for k in ["登入", "點此", "連結", "這裡", "Login", "sign"]):
         return clean_orig_text
         
-    # 2. 清洗文章標題，只留下純遊戲名稱
     clean_title = article_title
     for prefix in ["限時免費領取", "Steam 與 GOG 商店", "Steam 商店", "Epic 商店", "免費領取", "特惠"]:
         clean_title = clean_title.replace(prefix, "")
     
-    # 去除書名號與前後空白
     game_name = clean_title.replace("《", "").replace("》", "").replace("—", "-").strip()
     if not game_name:
         game_name = "限免遊戲"
         
-    # 3. 根據平台給予清晰的後綴辨識
     if "steampowered.com" in url_lower:
         return f"{game_name} (Steam)" if "與" in article_title or "GOG" in article_title else game_name
     elif "gog.com" in url_lower:
@@ -77,7 +73,7 @@ def get_store_display_name(url, original_text, article_title):
     return game_name
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，確保所有連結都有漂亮的顯示名稱"""
+    """解析單篇文章，過濾下載頁面與登入雜訊"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -110,14 +106,21 @@ def extract_all_store_links_and_pure_images(article_url):
             link_text = a.text.strip()
             href_lower = href.lower()
             
+            # 嚴格黑名單：排除登入、下載端點、註冊、幫助、社交媒體等非遊戲商店頁面
             black_keywords = [
                 '/login', '/signin', '/signup', '/register', '/logout', 
-                'support.', 'help.', 'facebook.com', 'twitter.com', 
-                'discord.gg', 'youtube.com', '##', 'cart', 'checkout'
+                '/download', '/downloads', 'support.', 'help.', 
+                'facebook.com', 'twitter.com', 'discord.gg', 'youtube.com', 
+                '##', 'cart', 'checkout'
             ]
             if any(x in href_lower for x in black_keywords):
                 continue
             
+            # 特別針對 Epic：確保不是主網域或下載頁面（Epic 遊戲頁面通常包含 /p/ 或 /product/ 或 /browse/）
+            if "epicgames.com" in href_lower:
+                if href_lower.rstrip('/') == "https://store.epicgames.com" or "/download" in href_lower:
+                    continue
+
             is_valid_store = any(domain in href_lower for domain in ALLOWED_STORE_DOMAINS)
             
             if href.startswith('http') and is_valid_store:
@@ -209,7 +212,7 @@ def send_to_discord(title, formatted_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (平台智慧命名版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (排除下載頁面版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
