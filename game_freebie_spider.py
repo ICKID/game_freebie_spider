@@ -72,12 +72,17 @@ def get_store_display_name(url, original_text, article_title):
         
     return game_name
 
+def extract_steam_appid(url):
+    """從 Steam 網址中精準提取 App ID"""
+    match = re.search(r'/app/(\d+)', url)
+    return match.group(1) if match else None
+
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，嚴格過濾帳戶、下載與非商店連結"""
+    """解析單篇文章，並透過網址逆向生成官方高清遊戲封面圖"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
-            return "", [], "", False
+            return "", [], [], False
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
@@ -88,12 +93,7 @@ def extract_all_store_links_and_pure_images(article_url):
         full_text = content_area.text
         
         if "限時免費" not in full_text and "限免" not in full_text:
-            return "", [], "", False
-            
-        main_img = ""
-        img_tag = content_area.select_one('img')
-        if img_tag and img_tag.get('src'):
-            main_img = img_tag['src']
+            return "", [], [], False
             
         title_tag = soup.select_one('h1.entry-title, h1.post-title, h1')
         article_title = title_tag.text.strip() if title_tag else "限時免費遊戲情報"
@@ -106,7 +106,6 @@ def extract_all_store_links_and_pure_images(article_url):
             link_text = a.text.strip()
             href_lower = href.lower()
             
-            # 嚴格黑名單：排除登入、帳戶、下載、註冊、購物車等非遊戲頁面
             black_keywords = [
                 '/login', '/signin', '/signup', '/register', '/logout', 
                 '/account', '/download', '/downloads', 'support.', 'help.', 
@@ -116,12 +115,10 @@ def extract_all_store_links_and_pure_images(article_url):
             if any(x in href_lower for x in black_keywords):
                 continue
             
-            # 特別針對 Epic：確保不是主網域或下載頁面
             if "epicgames.com" in href_lower:
                 if href_lower.rstrip('/') == "https://store.epicgames.com" or "/download" in href_lower:
                     continue
 
-            # 特別針對 GOG：確保不是根目錄或非遊戲頁面（GOG 遊戲頁面通常包含 /game/）
             if "gog.com" in href_lower:
                 if href_lower.rstrip('/') in ["https://www.gog.com", "https://gog.com", "https://www.gog.com/en", "https://gog.com/en"]:
                     continue
@@ -134,10 +131,11 @@ def extract_all_store_links_and_pure_images(article_url):
                     raw_links.append({"text": link_text, "url": href})
 
         if not raw_links:
-            return article_title, [], main_img, False
+            return article_title, [], [], False
 
         formatted_items = []
         used_indices = set()
+        images = []
 
         for i, current in enumerate(raw_links):
             if i in used_indices:
@@ -145,6 +143,15 @@ def extract_all_store_links_and_pure_images(article_url):
 
             current_text = current["text"]
             current_url = current["url"]
+            current_url_lower = current_url.lower()
+
+            # 逆向生成封面圖邏輯：
+            # 1. 如果是 Steam 網址，直接組合官方 CDN 高清橫幅圖
+            steam_appid = extract_steam_appid(current_url)
+            if steam_appid:
+                header_img = f"https://cdn.akamai.steamstatic.com/steam/apps/{steam_appid}/header.jpg"
+                if header_img not in images:
+                    images.append(header_img)
 
             if not is_base_game_text(current_text):
                 matched_base_game = None
@@ -177,13 +184,21 @@ def extract_all_store_links_and_pure_images(article_url):
                 })
                 used_indices.add(i)
 
-        return article_title, formatted_items, main_img, True
+        # 如果文章內完全沒有 Steam 網址可提取圖片（例如純 Epic 或 GOG），嘗試撈取文章裡第一張正規的遊戲宣傳圖作為備用
+        if not images:
+            for img in content_area.select('img'):
+                src = img.get('src')
+                if src and src.startswith('http') and not any(x in src.lower() for x in ['avatar', 'icon', 'emoji', 'spacer', '1x1']):
+                    images.append(src)
+                    break
+
+        return article_title, formatted_items, images, True
         
     except Exception as e:
         print(f"   ⚠️ 解析文章失敗: {e}")
-        return "", [], "", False
+        return "", [], [], False
 
-def send_to_discord(title, formatted_items, main_img):
+def send_to_discord(title, formatted_items, images):
     if not DISCORD_WEBHOOK_URL:
         print("❌ 錯誤：未設定 DISCORD_WEBHOOK_URL")
         return False
@@ -202,11 +217,19 @@ def send_to_discord(title, formatted_items, main_img):
         
         desc += line + "\n"
         
+    # 主 Embed（放入文章標題、清單與第一張官方/精選大圖）
     embed = DiscordEmbed(title=title, description=desc, color="03b2f8")
-    if main_img:
-        embed.set_image(url=main_img)
+    if images and len(images) > 0:
+        embed.set_image(url=images[0])
         
     webhook.add_embed(embed)
+    
+    # 如果抓到多張官方遊戲圖片（多遊戲合輯），透過額外的 Embed 展開相簿多圖展示
+    if images and len(images) > 1:
+        for extra_img in images[1:3]: # 最多額外展示 2 張
+            extra_embed = DiscordEmbed(color="03b2f8")
+            extra_embed.set_image(url=extra_img)
+            webhook.add_embed(extra_embed)
     
     response = webhook.execute()
     if response.status_code in [200, 204]:
@@ -217,18 +240,19 @@ def send_to_discord(title, formatted_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (全面帳戶過濾版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (官方 CDN 圖片逆向串聯版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
         if TEST_URL:
             print(f"🔍 正在強制測試指定網址: {TEST_URL}")
-            title, formatted_items, main_img, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
+            title, formatted_items, images, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
             print(f"   文章標題: {title}")
             print(f"   是否符合『限時免費』: {is_valid}")
+            print(f"   串聯到的官方/精選圖片清單: {images}")
             print(f"   智慧解析後的資料結構:\n{formatted_items}")
             if is_valid and formatted_items:
-                send_to_discord(title, formatted_items, main_img)
+                send_to_discord(title, formatted_items, images)
             else:
                 print("   ⚠️ 該測試網址不符合條件或未找到領取連結！")
         else:
@@ -285,11 +309,11 @@ def main():
                 continue
             
             print(f"\n   [檢查新文章] {title[:25]}...")
-            title, formatted_items, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
+            title, formatted_items, images, is_valid = extract_all_store_links_and_pure_images(article_url)
             
             if is_valid and formatted_items:
                 print(f"   ✅ 成功抓取並排版 {len(formatted_items)} 組連結，準備發送...")
-                is_success = send_to_discord(title, formatted_items, main_img)
+                is_success = send_to_discord(title, formatted_items, images)
                 if is_success:
                     history.add(article_url)
                     count += 1
