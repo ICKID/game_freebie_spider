@@ -78,7 +78,7 @@ def extract_steam_appid(url):
     return match.group(1) if match else None
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，並透過網址逆向生成官方高清遊戲封面圖"""
+    """解析單篇文章，確保每個 Steam Widget 都能抓到對應的高清封面圖"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -143,10 +143,8 @@ def extract_all_store_links_and_pure_images(article_url):
 
             current_text = current["text"]
             current_url = current["url"]
-            current_url_lower = current_url.lower()
 
-            # 逆向生成封面圖邏輯：
-            # 1. 如果是 Steam 網址，直接組合官方 CDN 高清橫幅圖
+            # 只要掃描到 Steam App ID 就立刻抓取官方 CDN 圖片並加入清單
             steam_appid = extract_steam_appid(current_url)
             if steam_appid:
                 header_img = f"https://cdn.akamai.steamstatic.com/steam/apps/{steam_appid}/header.jpg"
@@ -184,14 +182,6 @@ def extract_all_store_links_and_pure_images(article_url):
                 })
                 used_indices.add(i)
 
-        # 如果文章內完全沒有 Steam 網址可提取圖片（例如純 Epic 或 GOG），嘗試撈取文章裡第一張正規的遊戲宣傳圖作為備用
-        if not images:
-            for img in content_area.select('img'):
-                src = img.get('src')
-                if src and src.startswith('http') and not any(x in src.lower() for x in ['avatar', 'icon', 'emoji', 'spacer', '1x1']):
-                    images.append(src)
-                    break
-
         return article_title, formatted_items, images, True
         
     except Exception as e:
@@ -217,18 +207,17 @@ def send_to_discord(title, formatted_items, images):
         
         desc += line + "\n"
         
-    # 主 Embed（放入文章標題、清單與第一張官方/精選大圖）
+    # 主 Embed：包含標題、文字清單與第一張圖片
     embed = DiscordEmbed(title=title, description=desc, color="03b2f8")
     if images and len(images) > 0:
         embed.set_image(url=images[0])
-        
     webhook.add_embed(embed)
     
-    # 如果抓到多張官方遊戲圖片（多遊戲合輯），透過額外的 Embed 展開相簿多圖展示
+    # 修正重點：把後續抓到的每一張圖片（第二張、第三張等）都各自建立一個獨立的 Embed 附加上去
     if images and len(images) > 1:
-        for extra_img in images[1:3]: # 最多額外展示 2 張
+        for img_url in images[1:]:
             extra_embed = DiscordEmbed(color="03b2f8")
-            extra_embed.set_image(url=extra_img)
+            extra_embed.set_image(url=img_url)
             webhook.add_embed(extra_embed)
     
     response = webhook.execute()
@@ -240,7 +229,7 @@ def send_to_discord(title, formatted_items, images):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (官方 CDN 圖片逆向串聯版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (多圖完美並排版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
@@ -249,7 +238,7 @@ def main():
             title, formatted_items, images, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
             print(f"   文章標題: {title}")
             print(f"   是否符合『限時免費』: {is_valid}")
-            print(f"   串聯到的官方/精選圖片清單: {images}")
+            print(f"   抓到的圖片清單: {images}")
             print(f"   智慧解析後的資料結構:\n{formatted_items}")
             if is_valid and formatted_items:
                 send_to_discord(title, formatted_items, images)
@@ -309,7 +298,7 @@ def main():
                 continue
             
             print(f"\n   [檢查新文章] {title[:25]}...")
-            title, formatted_items, images, is_valid = extract_all_store_links_and_pure_images(article_url)
+            title, formatted_items, images, is_valid = extract_all_store_ils_and_pure_images = extract_all_store_links_and_pure_images(article_url)
             
             if is_valid and formatted_items:
                 print(f"   ✅ 成功抓取並排版 {len(formatted_items)} 組連結，準備發送...")
