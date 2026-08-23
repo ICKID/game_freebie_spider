@@ -46,23 +46,28 @@ def is_base_game_text(text):
     return any(keyword in clean_text for keyword in BASE_GAME_KEYWORDS)
 
 def get_store_display_name(url, original_text, article_title):
-    """精準萃取遊戲名稱並依平台命名"""
+    """使用正規表達式精準萃取純遊戲名稱並依平台命名"""
     url_lower = url.lower()
     clean_orig_text = original_text.strip() if original_text else ""
     
-    if clean_orig_text and not clean_orig_text.startswith("http") and not any(k in clean_orig_text for k in ["登入", "點此", "連結", "這裡", "Login", "sign"]):
+    # 1. 如果原始超連結文字有意義且不是泛用詞，優先使用
+    if clean_orig_text and not clean_orig_text.startswith("http") and not any(k in clean_orig_text for k in ["登入", "點此", "連結", "這裡", "Login", "sign", "GALAXY"]):
         return clean_orig_text
         
+    # 2. 利用正規表達式智慧清除標題中的「商店前綴」與「限免動作」
     clean_title = article_title
-    for prefix in ["限時免費領取", "Steam 與 GOG 商店", "Steam 商店", "Epic 商店", "免費領取", "特惠"]:
-        clean_title = clean_title.replace(prefix, "")
+    # 移除像 "Steam、GOG、Epic 商店限時免費領取" 或 "Steam 與 GOG 商店" 這種開頭
+    clean_title = re.sub(r'^(?:Steam[、與\s]*|GOG[、與\s]*|Epic[、與\s]*|商店[、與\s]*)+', '', clean_title, flags=re.IGNORECASE)
+    clean_title = clean_title.replace("限時免費領取", "").replace("免費領取", "").replace("特惠", "")
     
+    # 去除書名號、特殊符號與前後空白
     game_name = clean_title.replace("《", "").replace("》", "").replace("—", "-").strip()
     if not game_name:
         game_name = "限免遊戲"
         
+    # 3. 根據平台給予清晰的後綴辨識
     if "steampowered.com" in url_lower:
-        return f"{game_name} (Steam)" if "與" in article_title or "GOG" in article_title else game_name
+        return f"{game_name} (Steam)"
     elif "gog.com" in url_lower:
         return f"{game_name} (GOG)"
     elif "epicgames.com" in url_lower:
@@ -73,7 +78,7 @@ def get_store_display_name(url, original_text, article_title):
     return game_name
 
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，過濾下載頁面與登入雜訊"""
+    """解析單篇文章，過濾無關連結與雜訊"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -111,12 +116,12 @@ def extract_all_store_links_and_pure_images(article_url):
                 '/login', '/signin', '/signup', '/register', '/logout', 
                 '/download', '/downloads', 'support.', 'help.', 
                 'facebook.com', 'twitter.com', 'discord.gg', 'youtube.com', 
-                '##', 'cart', 'checkout'
+                '##', 'cart', 'checkout', 'galaxy'
             ]
             if any(x in href_lower for x in black_keywords):
                 continue
             
-            # 特別針對 Epic：確保不是主網域或下載頁面（Epic 遊戲頁面通常包含 /p/ 或 /product/ 或 /browse/）
+            # 特別針對 Epic：確保不是主網域或下載頁面
             if "epicgames.com" in href_lower:
                 if href_lower.rstrip('/') == "https://store.epicgames.com" or "/download" in href_lower:
                     continue
@@ -212,7 +217,7 @@ def send_to_discord(title, formatted_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (排除下載頁面版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (正規表示式標題清洗版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
