@@ -19,6 +19,18 @@ HEADERS = {
 
 BASE_GAME_KEYWORDS = ["遊戲本體", "主遊戲", "base game", "本體", "steam頁面"]
 
+# 允許的遊戲商店網域（確保只抓真正能領遊戲的商店）
+ALLOWED_STORE_DOMAINS = [
+    "store.steampowered.com",
+    "gog.com",
+    "epicgames.com",
+    "humblebundle.com",
+    "itch.io",
+    "indiegala.com",
+    "ubisod.com",
+    "ea.com"
+]
+
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return set()
@@ -31,12 +43,33 @@ def save_history(history):
             f.write(f"{url}\n")
 
 def is_base_game_text(text):
-    """判斷超連結文字是否屬於『遊戲本體』這類附屬說明文字"""
     clean_text = text.strip().lower()
     return any(keyword in clean_text for keyword in BASE_GAME_KEYWORDS)
 
+def get_store_display_name(url, original_text, article_title):
+    """智慧判斷商店顯示名稱"""
+    url_lower = url.lower()
+    
+    # 如果原始文字夠長且不是泛用詞，優先使用原始文字
+    if original_text and len(original_text) > 2 and not any(k in original_text for k in ["登入", "點此", "連結", "這裡", "Login", "sign"]):
+        return original_text
+        
+    # 依據網址判斷屬於哪個平台
+    if "steampowered.com" in url_lower:
+        if "app/" in url_lower:
+            return article_title.replace("限時免費領取", "").replace("《", "").replace("》", "").strip()
+        return "Steam 商店"
+    elif "gog.com" in url_lower:
+        return "GOG 商店"
+    elif "epicgames.com" in url_lower:
+        return "Epic Games 商店"
+    elif "itch.io" in url_lower:
+        return "Itch.io 商店"
+        
+    return article_title if article_title else "點此前往領取"
+
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，並進行智慧語義結構化解析"""
+    """解析單篇文章，嚴格過濾登入連結與雜訊"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -50,7 +83,6 @@ def extract_all_store_links_and_pure_images(article_url):
             
         full_text = content_area.text
         
-        # 1. 確認是否為「限時免費」
         if "限時免費" not in full_text and "限免" not in full_text:
             return "", [], "", False
             
@@ -65,17 +97,24 @@ def extract_all_store_links_and_pure_images(article_url):
         raw_links = []
         seen_urls = set()
         
-        # 抓取內文中所有有效的外部領取/商店連結
         for a in content_area.select('a'):
             href = a.get('href', '').strip()
             link_text = a.text.strip()
             href_lower = href.lower()
             
-            # 過濾無關的社交或功能性連結
-            if any(x in href_lower for x in ['/login', '/download', '/signin', 'support.', 'help.', 'facebook.com', 'twitter.com', 'discord.gg', 'youtube.com']):
+            # 嚴格黑名單：排除登入、註冊、登出、幫助、社交媒體等非商店連結
+            black_keywords = [
+                '/login', '/signin', '/signup', '/register', '/logout', 
+                'support.', 'help.', 'facebook.com', 'twitter.com', 
+                'discord.gg', 'youtube.com', '##', 'cart', 'checkout'
+            ]
+            if any(x in href_lower for x in black_keywords):
                 continue
             
-            if href.startswith('http') and 'freesteam.games' not in href:
+            # 檢查是否為支援的商店網域
+            is_valid_store = any(domain in href_lower for domain in ALLOWED_STORE_DOMAINS)
+            
+            if href.startswith('http') and is_valid_store:
                 if href not in seen_urls:
                     seen_urls.add(href)
                     raw_links.append({"text": link_text, "url": href})
@@ -83,7 +122,7 @@ def extract_all_store_links_and_pure_images(article_url):
         if not raw_links:
             return article_title, [], main_img, False
 
-        # 2. 智慧語義比對與組合處理
+        # 智慧語義與配對處理
         formatted_items = []
         used_indices = set()
 
@@ -94,55 +133,36 @@ def extract_all_store_links_and_pure_images(article_url):
             current_text = current["text"]
             current_url = current["url"]
 
-            # 情境 A：當前項目是普通遊戲/DLC 名稱
             if not is_base_game_text(current_text):
                 matched_base_game = None
                 
-                # 向後探測 1 個位置，檢查是否緊跟著「遊戲本體」連結
                 if i + 1 < len(raw_links) and (i + 1) not in used_indices:
                     next_item = raw_links[i + 1]
                     if is_base_game_text(next_item["text"]):
                         matched_base_game = next_item
                         used_indices.add(i + 1)
                 
-                # 如果後面沒有，向前探測 1 個位置（防止先寫『遊戲本體』再寫名稱的情況）
                 if not matched_base_game and i - 1 >= 0 and (i - 1) not in used_indices:
                     prev_item = raw_links[i - 1]
                     if is_base_game_text(prev_item["text"]):
                         matched_base_game = prev_item
                         used_indices.add(i - 1)
 
+                display_name = get_store_display_name(current_url, current_text, article_title)
+
                 formatted_items.append({
-                    "title": current_text if current_text else article_title,
+                    "title": display_name,
                     "url": current_url,
                     "base_game_url": matched_base_game["url"] if matched_base_game else None
                 })
                 used_indices.add(i)
-
-            # 情境 B：當前項目本身就是「遊戲本體」（且未被前方遊戲名稱綁定）
             else:
-                # 嘗試尋找前後未被使用的遊戲名稱
-                matched_main_game = None
-                if i + 1 < len(raw_links) and (i + 1) not in used_indices and not is_base_game_text(raw_links[i + 1]["text"]):
-                    matched_main_game = raw_links[i + 1]
-                    used_indices.add(i + 1)
-                elif i - 1 >= 0 and (i - 1) not in used_indices and not is_base_game_text(raw_links[i - 1]["text"]):
-                    matched_main_game = raw_links[i - 1]
-                    used_indices.add(i - 1)
-
-                if matched_main_game:
-                    formatted_items.append({
-                        "title": matched_main_game["text"],
-                        "url": matched_main_game["url"],
-                        "base_game_url": current_url
-                    })
-                else:
-                    # 孤立的「遊戲本體」連結，直接將其作為獨立連結呈現
-                    formatted_items.append({
-                        "title": f"{article_title} (遊戲本體)",
-                        "url": current_url,
-                        "base_game_url": None
-                    })
+                # 獨立本體處理
+                formatted_items.append({
+                    "title": f"{article_title} (遊戲本體)",
+                    "url": current_url,
+                    "base_game_url": None
+                })
                 used_indices.add(i)
 
         return article_title, formatted_items, main_img, True
@@ -185,7 +205,7 @@ def send_to_discord(title, formatted_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (動態語義配對版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (商店白名單過濾版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
@@ -256,7 +276,7 @@ def main():
             title, formatted_items, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
             
             if is_valid and formatted_items:
-                print(f"   ✅ 成功抓取並配對 {len(formatted_items)} 組連結，準備發送...")
+                print(f"   ✅ 成功抓取並過濾 {len(formatted_items)} 組商店連結，準備發送...")
                 is_success = send_to_discord(title, formatted_items, main_img)
                 if is_success:
                     history.add(article_url)
