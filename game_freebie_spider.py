@@ -2,11 +2,11 @@ import time
 import requests
 from bs4 import BeautifulSoup
 import os
-import sys # 🎯 確保有載入 sys 模組
+import sys
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-IS_TEST_MODE = os.environ.get("TEST_MODE") == "true" or "--test" in sys.argv
-TEST_URL = os.environ.get("TEST_URL", "").strip() # 🎯 讀取環境變數中的指定測試網址
+IS_TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true" or "--test" in sys.argv
+TEST_URL = os.environ.get("TEST_URL", "").strip()
 
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
 HISTORY_FILE = "posted_links.txt"
@@ -153,11 +153,10 @@ def send_to_discord_clean_images(title, store_links, widget_steam_urls, freestea
 def main():
     print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（測試網址修正版）...")
     
-    # 🎯 核心修正：如果設定了 TEST_URL，直接優先針對該網址進行測試發送！
-    if TEST_MODE and TEST_URL:
+    # 🎯 這裡改用修正後的 IS_TEST_MODE 變數
+    if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
         try:
-            # 為了抓到文章標題，我們可以直接請求該網頁
             res = requests.get(TEST_URL, headers=HEADERS, timeout=10)
             soup = BeautifulSoup(res.text, 'html.parser')
             title_tag = soup.select_one('h1.entry-title, h1')
@@ -175,7 +174,6 @@ def main():
             print(f"   ❌ 測試執行發生異常: {e}")
         return
 
-    # 以下維持原本的自動排程邏輯
     history = load_history()
     print(f"📋 載入歷史紀錄，目前已記憶了 {len(history)} 個網址。")
     
