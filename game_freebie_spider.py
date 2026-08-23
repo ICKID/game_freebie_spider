@@ -46,34 +46,35 @@ def is_base_game_text(text):
     return any(keyword in clean_text for keyword in BASE_GAME_KEYWORDS)
 
 def get_store_display_name(url, original_text, article_title):
-    """智慧判斷商店顯示名稱：如果沒有文字，自動賦予預設名稱"""
+    """精準萃取遊戲名稱並依平台命名"""
     url_lower = url.lower()
     clean_orig_text = original_text.strip() if original_text else ""
     
-    # 1. 如果原始超連結文字有內容，且不是純網址、不是登入字眼，就優先使用
+    # 1. 如果原始超連結文字有意義，優先使用
     if clean_orig_text and not clean_orig_text.startswith("http") and not any(k in clean_orig_text for k in ["登入", "點此", "連結", "這裡", "Login", "sign"]):
         return clean_orig_text
         
-    # 2. 如果沒有自訂文字，根據網址平台與文章標題來智慧組合
-    game_name = article_title.replace("限時免費領取", "").replace("《", "").replace("》", "").strip()
+    # 2. 清洗文章標題，只留下純遊戲名稱
+    clean_title = article_title
+    for prefix in ["限時免費領取", "Steam 與 GOG 商店", "Steam 商店", "Epic 商店", "免費領取", "特惠"]:
+        clean_title = clean_title.replace(prefix, "")
     
-    if "steampowered.com" in url_lower:
-        if game_name and len(game_name) > 2:
-            return game_name
-        return "Steam 商店"
-    elif "gog.com" in url_lower:
-        if game_name and len(game_name) > 2:
-            return f"{game_name} (GOG)"
-        return "GOG 商店"
-    elif "epicgames.com" in url_lower:
-        if game_name and len(game_name) > 2:
-            return f"{game_name} (Epic)"
-        return "Epic Games 商店"
-    elif "itch.io" in url_lower:
-        return "Itch.io 商店"
+    # 去除書名號與前後空白
+    game_name = clean_title.replace("《", "").replace("》", "").replace("—", "-").strip()
+    if not game_name:
+        game_name = "限免遊戲"
         
-    # 3. 最終備用
-    return game_name if game_name else "點此前往領取遊戲"
+    # 3. 根據平台給予清晰的後綴辨識
+    if "steampowered.com" in url_lower:
+        return f"{game_name} (Steam)" if "與" in article_title or "GOG" in article_title else game_name
+    elif "gog.com" in url_lower:
+        return f"{game_name} (GOG)"
+    elif "epicgames.com" in url_lower:
+        return f"{game_name} (Epic)"
+    elif "itch.io" in url_lower:
+        return f"{game_name} (Itch.io)"
+        
+    return game_name
 
 def extract_all_store_links_and_pure_images(article_url):
     """解析單篇文章，確保所有連結都有漂亮的顯示名稱"""
@@ -208,7 +209,7 @@ def send_to_discord(title, formatted_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (預設名稱補全版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (平台智慧命名版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
