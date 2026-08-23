@@ -58,9 +58,7 @@ def extract_all_store_links_and_pure_images(page_url):
                         widget_steam_urls.append(widget_url)
                 except: pass
 
-        # 抓取所有超連結，保留文章中的先後順序與個別文字
         links = content_area.find_all('a', href=True)
-        seen_links = set()
         
         for tag in links:
             href = tag['href'].split('?')[0].rstrip('/')
@@ -82,13 +80,10 @@ def extract_all_store_links_and_pure_images(page_url):
                 if "account/login" not in href and href != "https://www.gog.com":
                     platform = "GOG"
 
-            # 允許相同網址或多個連結獨立存在（不使用 seen_links 過濾掉文章中不同的按鈕，確保有幾個連結就抓幾個）
             if platform:
                 all_game_urls_in_article.add(href)
-                
                 clean_name = " ".join(raw_text.split())
                 
-                # 如果文字太短或無意義，才用網址補足
                 if not clean_name or len(clean_name) <= 1 or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name:
                     try:
                         slug = href.rstrip('/').split('/')[-1]
@@ -110,7 +105,7 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """維持文章中原本的連結數量與各別行數"""
+    """智慧將獨立的「遊戲本體」合併到同一行，維持兩行正確呈現"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -137,12 +132,30 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if not collected_covers and freesteam_main_image:
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 忠於原文：有幾個超連結就逐一印出幾行，各自保有自己的文字與網址
-    links_text = ""
-    for item in store_items:
-        game_name = item["name"]
-        link = item["link"]
-        links_text += f"[{game_name}]({link})\n"
+    # 🎯 核心排版邏輯：
+    # 如果抓到的項目裡有「遊戲本體」，把它與前一個禮包合併在同一行顯示：
+    # 例如：[阿爾比恩Online史詩法師禮包](網址B) ([遊戲本體](網址C)) 或是直接把文字串在一起
+    processed_lines = []
+    skip_next = False
+    
+    for i in range(len(store_items)):
+        if skip_next:
+            skip_next = False
+            continue
+            
+        current = store_items[i]
+        
+        # 檢查下一個項目是不是「遊戲本體」
+        if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本體":
+            next_item = store_items[i+1]
+            # 結合成同一行：禮包帶超連結，後面接一個帶超連結的 (遊戲本體)
+            combined_line = f"[{current['name']}]({current['link']}) ([遊戲本體]({next_item['link']}))"
+            processed_lines.append(combined_line)
+            skip_next = True  # 跳過下一個迴圈，因為已經合進來了
+        else:
+            processed_lines.append(f"[{current['name']}]({current['link']})")
+
+    links_text = "\n".join(processed_lines) + "\n"
 
     main_embed = DiscordEmbed(title=title, color=card_color)
     main_embed.add_embed_field(name="🎁 領取網址", value=links_text, inline=False)
@@ -165,7 +178,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（原始連結忠實呈現版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（兩行完美對應版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
