@@ -30,7 +30,6 @@ def save_history(history_set):
             f.write(f"{link}\n")
 
 def check_image_exists(img_url):
-    """檢查該圖片網址是否真實存在且可讀取 (回傳 200)"""
     try:
         response = requests.head(img_url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
@@ -40,7 +39,6 @@ def check_image_exists(img_url):
     return False
 
 def get_valid_steam_image(app_id):
-    """智慧尋找有效的 Steam 圖片，若官方主圖失效則嘗試備用來源"""
     official_img = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
     if check_image_exists(official_img):
         return official_img
@@ -55,8 +53,29 @@ def get_valid_steam_image(app_id):
         
     return None
 
+def fetch_game_name_from_steamdb(app_id):
+    """當只有純數字 ID 時，連線至 SteamDB 抓取真實遊戲名稱"""
+    try:
+        url = f"https://steamdb.info/app/{app_id}/"
+        # SteamDB 需要比較像真實瀏覽器的 User-Agent 避免阻擋
+        db_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, headers=db_headers, timeout=8)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            # SteamDB 通常將遊戲名稱放在 h1 標籤中
+            h1_tag = soup.select_one('div.container h1')
+            if h1_tag:
+                # 移除可能包含的額外 tag 文字
+                game_name = h1_tag.get_text().strip()
+                if game_name:
+                    return game_name
+    except Exception as e:
+        print(f"   ⚠️ 從 SteamDB 抓取 App ID {app_id} 名稱失敗: {e}")
+    return None
+
 def extract_all_store_links_and_pure_images(page_url):
-    """精準過濾無關網址（如 Galaxy、登入頁），並清楚辨識平台"""
     found_stores = []  
     widget_steam_urls = [] 
     all_game_urls_in_article = set()
@@ -98,7 +117,6 @@ def extract_all_store_links_and_pure_images(page_url):
             href = tag['href'].split('?')[0].rstrip('/')
             raw_text = tag.get_text().strip()
             
-            # 🛑 嚴格過濾：排除 GOG Galaxy、登入頁、說明頁等非遊戲商店網址
             lower_href = href.lower()
             if any(bad in lower_href for bad in ["galaxy", "login", "support", "privacy", "download", "u/"]):
                 continue
@@ -119,21 +137,25 @@ def extract_all_store_links_and_pure_images(page_url):
                 all_game_urls_in_article.add(href)
                 clean_name = " ".join(raw_text.split())
                 
-                # 如果抓到的文字太短、包含無關字眼，或是抓到類似「登入」的字，改用預設名稱
-                if not clean_name or len(clean_name) <= 1 or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name or "商店頁面" in clean_name:
-                    try:
-                        slug = href.rstrip('/').split('/')[-1]
-                        clean_name = slug.replace('-', ' ').replace('_', ' ').title()
-                    except:
-                        clean_name = f"{platform} 遊戲"
+                # 🎯 關鍵升級：如果抓到的名稱是純數字，自動向 SteamDB 查詢真實名稱！
+                if not clean_name or len(clean_name) <= 1 or clean_name.isdigit() or "http" in clean_name or "點擊" in clean_name or "這裡" in clean_name or "商店頁面" in clean_name:
+                    if clean_name.isdigit():
+                        app_id = clean_name
+                        print(f"   🔍 發現純數字 ID [{app_id}]，正在向 SteamDB 查詢真實遊戲名稱...")
+                        db_name = fetch_game_name_from_steamdb(app_id)
+                        clean_name = db_name if db_name else f"Steam 限免遊戲 ({app_id})"
+                    else:
+                        try:
+                            slug = href.rstrip('/').split('/')[-1]
+                            clean_name = slug.replace('-', ' ').replace('_', ' ').title()
+                        except:
+                            clean_name = f"{platform} 遊戲"
                 
-                # 🎯 避免重複加入同一個網址
-                if not any(item['link'] == href for item in found_stores):
-                    found_stores.append({
-                        "link": href,
-                        "name": clean_name,
-                        "platform": platform
-                    })
+                found_stores.append({
+                    "link": href,
+                    "name": clean_name,
+                    "platform": platform
+                })
 
     except: pass
     
@@ -143,7 +165,6 @@ def extract_all_store_links_and_pure_images(page_url):
     return found_stores, widget_steam_urls, freesteam_main_image
 
 def send_to_discord_clean_images(title, store_items, widget_steam_urls, freesteam_main_image):
-    """在項目名稱前自動標註平台，並維持乾淨的排版"""
     if not store_items: return
     if not DISCORD_WEBHOOK_URL: return
     
@@ -167,7 +188,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         if check_image_exists(freesteam_main_image):
             collected_covers.append(freesteam_main_image)
 
-    # 🎯 組合排版：自動帶入平台標籤（例如 [Steam] 遊戲名稱）
+    # 組合排版：處理「遊戲本體」合併在同一行，並加上平台標籤
     processed_lines = []
     skip_next = False
     
@@ -179,12 +200,13 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         current = store_items[i]
         platform_label = f"[{current['platform']}] "
         
-        if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本":
-            # 預防保險的遊戲本體合併
-            pass
-            
-        # 組合出格式：[Steam] 遊戲名稱 (網址)
-        processed_lines.append(f"{platform_label}[{current['name']}]({current['link']})")
+        if i + 1 < len(store_items) and store_items[i+1]["name"] == "遊戲本體":
+            next_item = store_items[i+1]
+            combined_line = f"{platform_label}[{current['name']}]({current['link']}) ([遊戲本體]({next_item['link']}))"
+            processed_lines.append(combined_line)
+            skip_next = True
+        else:
+            processed_lines.append(f"{platform_label}[{current['name']}]({current['link']})")
 
     links_text = "\n".join(processed_lines) + "\n"
 
@@ -209,7 +231,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（平台辨識與防呆過濾版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（SteamDB 名稱查詢版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
