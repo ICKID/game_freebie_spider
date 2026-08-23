@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 import sys
+import re
 
 # --- 設定區 ---
 URL_FREESTEAM = "https://freesteam.games/category/free-games"
@@ -16,6 +17,8 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
+BASE_GAME_KEYWORDS = ["遊戲本體", "主遊戲", "base game", "本體", "steam頁面"]
+
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return set()
@@ -27,8 +30,13 @@ def save_history(history):
         for url in history:
             f.write(f"{url}\n")
 
+def is_base_game_text(text):
+    """判斷超連結文字是否屬於『遊戲本體』這類附屬說明文字"""
+    clean_text = text.strip().lower()
+    return any(keyword in clean_text for keyword in BASE_GAME_KEYWORDS)
+
 def extract_all_store_links_and_pure_images(article_url):
-    """解析單篇文章，智慧整理遊戲名稱與領取連結"""
+    """解析單篇文章，並進行智慧語義結構化解析"""
     try:
         res = requests.get(article_url, headers=HEADERS, timeout=15)
         if res.status_code != 200:
@@ -52,58 +60,115 @@ def extract_all_store_links_and_pure_images(article_url):
             main_img = img_tag['src']
             
         title_tag = soup.select_one('h1.entry-title, h1.post-title, h1')
-        title = title_tag.text.strip() if title_tag else "限時免費遊戲情報"
+        article_title = title_tag.text.strip() if title_tag else "限時免費遊戲情報"
             
-        link_items = []
+        raw_links = []
         seen_urls = set()
         
-        # 2. 抓取所有文章內的有效外網連結
-        paragraphs = content_area.select('p, li, div')
-        if not paragraphs:
-            paragraphs = [content_area]
-
-        for p in paragraphs:
-            for a in p.select('a'):
-                href = a.get('href', '').strip()
-                link_text = a.text.strip()
-                href_lower = href.lower()
-                
-                # 排除不相關的外部連結
-                if any(x in href_lower for x in ['/login', '/download', '/signin', 'support.', 'help.', 'facebook.com', 'twitter.com', 'discord.gg', 'youtube.com']):
-                    continue
-                
-                if href.startswith('http') and 'freesteam.games' not in href:
-                    if href not in seen_urls:
-                        seen_urls.add(href)
-                        # 如果文字只是「遊戲本體」或「領取連結」，略過不獨立成行，改由後續處理或賦予預設名稱
-                        if link_text and len(link_text) > 1:
-                            link_items.append({"text": link_text, "url": href})
-                
-        if not link_items:
-            return title, [], main_img, False
+        # 抓取內文中所有有效的外部領取/商店連結
+        for a in content_area.select('a'):
+            href = a.get('href', '').strip()
+            link_text = a.text.strip()
+            href_lower = href.lower()
             
-        return title, link_items, main_img, True
+            # 過濾無關的社交或功能性連結
+            if any(x in href_lower for x in ['/login', '/download', '/signin', 'support.', 'help.', 'facebook.com', 'twitter.com', 'discord.gg', 'youtube.com']):
+                continue
+            
+            if href.startswith('http') and 'freesteam.games' not in href:
+                if href not in seen_urls:
+                    seen_urls.add(href)
+                    raw_links.append({"text": link_text, "url": href})
+
+        if not raw_links:
+            return article_title, [], main_img, False
+
+        # 2. 智慧語義比對與組合處理
+        formatted_items = []
+        used_indices = set()
+
+        for i, current in enumerate(raw_links):
+            if i in used_indices:
+                continue
+
+            current_text = current["text"]
+            current_url = current["url"]
+
+            # 情境 A：當前項目是普通遊戲/DLC 名稱
+            if not is_base_game_text(current_text):
+                matched_base_game = None
+                
+                # 向後探測 1 個位置，檢查是否緊跟著「遊戲本體」連結
+                if i + 1 < len(raw_links) and (i + 1) not in used_indices:
+                    next_item = raw_links[i + 1]
+                    if is_base_game_text(next_item["text"]):
+                        matched_base_game = next_item
+                        used_indices.add(i + 1)
+                
+                # 如果後面沒有，向前探測 1 個位置（防止先寫『遊戲本體』再寫名稱的情況）
+                if not matched_base_game and i - 1 >= 0 and (i - 1) not in used_indices:
+                    prev_item = raw_links[i - 1]
+                    if is_base_game_text(prev_item["text"]):
+                        matched_base_game = prev_item
+                        used_indices.add(i - 1)
+
+                formatted_items.append({
+                    "title": current_text if current_text else article_title,
+                    "url": current_url,
+                    "base_game_url": matched_base_game["url"] if matched_base_game else None
+                })
+                used_indices.add(i)
+
+            # 情境 B：當前項目本身就是「遊戲本體」（且未被前方遊戲名稱綁定）
+            else:
+                # 嘗試尋找前後未被使用的遊戲名稱
+                matched_main_game = None
+                if i + 1 < len(raw_links) and (i + 1) not in used_indices and not is_base_game_text(raw_links[i + 1]["text"]):
+                    matched_main_game = raw_links[i + 1]
+                    used_indices.add(i + 1)
+                elif i - 1 >= 0 and (i - 1) not in used_indices and not is_base_game_text(raw_links[i - 1]["text"]):
+                    matched_main_game = raw_links[i - 1]
+                    used_indices.add(i - 1)
+
+                if matched_main_game:
+                    formatted_items.append({
+                        "title": matched_main_game["text"],
+                        "url": matched_main_game["url"],
+                        "base_game_url": current_url
+                    })
+                else:
+                    # 孤立的「遊戲本體」連結，直接將其作為獨立連結呈現
+                    formatted_items.append({
+                        "title": f"{article_title} (遊戲本體)",
+                        "url": current_url,
+                        "base_game_url": None
+                    })
+                used_indices.add(i)
+
+        return article_title, formatted_items, main_img, True
         
     except Exception as e:
         print(f"   ⚠️ 解析文章失敗: {e}")
         return "", [], "", False
 
-def send_to_discord(title, link_items, main_img):
+def send_to_discord(title, formatted_items, main_img):
     if not DISCORD_WEBHOOK_URL:
         print("❌ 錯誤：未設定 DISCORD_WEBHOOK_URL")
         return False
         
     webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
     
-    # 🎯 讓每個遊戲/DLC 獨立一行顯示，過濾掉單獨的「遊戲本體」雜訊文字
     desc = ""
-    for item in link_items:
-        text = item["text"]
-        url = item["url"]
-        # 如果抓到的文字剛好是「遊戲本體」，我們給它一個更清楚的顯示
-        if text in ["遊戲本體", "領取連結", "點此領取"]:
-            text = "點此前往領取"
-        desc += f"🔗 [{text}]({url})\n"
+    for item in formatted_items:
+        item_title = item["title"]
+        main_url = item["url"]
+        base_game_url = item["base_game_url"]
+        
+        line = f"🔗 [{item_title}]({main_url})"
+        if base_game_url:
+            line += f" | 🎮 [遊戲本體]({base_game_url})"
+        
+        desc += line + "\n"
         
     embed = DiscordEmbed(title=title, description=desc, color="03b2f8")
     if main_img:
@@ -120,18 +185,18 @@ def send_to_discord(title, link_items, main_img):
         return False
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (獨立清單排版版)...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動 (動態語義配對版)...")
     
     if TEST_MODE:
         print("⚠️ 測試模式已開啟")
         if TEST_URL:
             print(f"🔍 正在強制測試指定網址: {TEST_URL}")
-            title, link_items, main_img, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
-            print(f"   標題: {title}")
+            title, formatted_items, main_img, is_valid = extract_all_store_links_and_pure_images(TEST_URL)
+            print(f"   文章標題: {title}")
             print(f"   是否符合『限時免費』: {is_valid}")
-            print(f"   抓取到的連結項目: {link_items}")
-            if is_valid and link_items:
-                send_to_discord(title, link_items, main_img)
+            print(f"   智慧解析後的資料結構:\n{formatted_items}")
+            if is_valid and formatted_items:
+                send_to_discord(title, formatted_items, main_img)
             else:
                 print("   ⚠️ 該測試網址不符合條件或未找到領取連結！")
         else:
@@ -188,11 +253,11 @@ def main():
                 continue
             
             print(f"\n   [檢查新文章] {title[:25]}...")
-            title, link_items, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
+            title, formatted_items, main_img, is_valid = extract_all_store_links_and_pure_images(article_url)
             
-            if is_valid and link_items:
-                print(f"   ✅ 成功抓取到 {len(link_items)} 個連結，準備發送...")
-                is_success = send_to_discord(title, link_items, main_img)
+            if is_valid and formatted_items:
+                print(f"   ✅ 成功抓取並配對 {len(formatted_items)} 組連結，準備發送...")
+                is_success = send_to_discord(title, formatted_items, main_img)
                 if is_success:
                     history.add(article_url)
                     count += 1
