@@ -54,22 +54,23 @@ def get_valid_steam_image(app_id):
     return None
 
 def fetch_game_name_from_steamdb(app_id):
-    """當只有純數字 ID 時，連線至 SteamDB 抓取真實遊戲名稱"""
+    """
+    透過 Steam 官方 appdetails API 抓取真實遊戲名稱。
+    (原本改用 SteamDB 網頁爬取，但 SteamDB 有 Cloudflare 防機器人機制，
+     經常抓不到內容，所以改用 Steam 官方 API，穩定不會被擋。)
+    """
     try:
-        url = f"https://steamdb.info/app/{app_id}/"
-        db_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        }
-        res = requests.get(url, headers=db_headers, timeout=8)
+        url = f"https://store.steampowered.com/api/appdetails?appids={app_id}&l=tchinese"
+        res = requests.get(url, headers=HEADERS, timeout=8)
         if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            h1_tag = soup.select_one('div.container h1')
-            if h1_tag:
-                game_name = h1_tag.get_text().strip()
-                if game_name:
-                    return game_name
+            data = res.json()
+            app_data = data.get(str(app_id), {})
+            if app_data.get("success"):
+                name = app_data.get("data", {}).get("name")
+                if name:
+                    return name.strip()
     except Exception as e:
-        print(f"   ⚠️ 從 SteamDB 抓取 App ID {app_id} 名稱失敗: {e}")
+        print(f"   ⚠️ 從 Steam API 抓取 App ID {app_id} 名稱失敗: {e}")
     return None
 
 def extract_all_store_links_and_pure_images(page_url):
@@ -140,17 +141,17 @@ def extract_all_store_links_and_pure_images(page_url):
                     if clean_name.isdigit():
                         # 情況一：連結文字本身就是純數字 ID
                         app_id = clean_name
-                        print(f"   🔍 發現純數字 ID [{app_id}]，正在向 SteamDB 查詢真實遊戲名稱...")
+                        print(f"   🔍 發現純數字 ID [{app_id}]，正在向 Steam API 查詢真實遊戲名稱...")
                         db_name = fetch_game_name_from_steamdb(app_id)
                         clean_name = db_name if db_name else f"Steam 限免遊戲 ({app_id})"
                     else:
                         try:
                             slug = href.rstrip('/').split('/')[-1]
                             
-                            # 🔧 情況二：網址 slug 也是純數字（例如網址只到 /app/1234567 沒有名稱後綴）
+                            # 情況二：網址 slug 也是純數字（例如網址只到 /app/1234567 沒有名稱後綴）
                             if slug.isdigit() and platform == "Steam":
                                 app_id = slug
-                                print(f"   🔍 網址無遊戲名稱 slug，偵測到純數字 App ID [{app_id}]，正在向 SteamDB 查詢...")
+                                print(f"   🔍 網址無遊戲名稱 slug，偵測到純數字 App ID [{app_id}]，正在向 Steam API 查詢...")
                                 db_name = fetch_game_name_from_steamdb(app_id)
                                 clean_name = db_name if db_name else f"Steam 限免遊戲 ({app_id})"
                             else:
@@ -239,7 +240,7 @@ def send_to_discord_clean_images(title, store_items, widget_steam_urls, freestea
         print(f"❌ Discord 發送失敗: {e}")
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（網址 slug 數字防呆版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（Steam 官方 API 版）...")
     
     if IS_TEST_MODE and TEST_URL:
         print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
