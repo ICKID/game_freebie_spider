@@ -3,7 +3,7 @@ import re
 import os
 import sys
 
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
@@ -14,11 +14,29 @@ TEST_URL = os.environ.get("TEST_URL", "").strip()
 URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
 HISTORY_FILE = "posted_links.txt"
 
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 5
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://freesteam.games/",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "sec-ch-ua": '"Chromium";v="125", "Not.A/Brand";v="24", "Google Chrome";v="125"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
 }
+
+# 🛡️ 用 cloudscraper 取代 requests：能自動處理 Cloudflare 類型的防機器人挑戰頁面
+SCRAPER = cloudscraper.create_scraper(
+    browser={"browser": "chrome", "platform": "windows", "desktop": True}
+)
 
 BAD_HREF_KEYWORDS = ["galaxy", "login", "support", "privacy", "download", "/u/", "account", "cart", "order", "checkout"]
 GENERIC_TEXT_KEYWORDS = ["點擊", "這裡", "商店頁面"]
@@ -42,6 +60,36 @@ def save_history(history_set):
 
 
 # ------------------------------------------------------------------
+# 共用的請求函式：帶重試機制 + 偵錯輸出
+# ------------------------------------------------------------------
+
+def fetch_url(url, timeout=15, label=""):
+    """
+    統一的網頁請求函式。
+    - 使用 cloudscraper 繞過基本的防機器人偵測
+    - 失敗時自動重試（最多 MAX_RETRIES 次）
+    - 印出狀態碼，方便未來排查「被擋下但沒有報錯」的狀況
+    """
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            res = SCRAPER.get(url, headers=HEADERS, timeout=timeout)
+            print(f"   🌐 [{label}] 請求 {url} → 狀態碼 {res.status_code}（第 {attempt} 次嘗試）")
+            if res.status_code == 200:
+                return res
+            last_error = f"狀態碼異常: {res.status_code}"
+        except Exception as e:
+            last_error = str(e)
+            print(f"   ⚠️ [{label}] 第 {attempt} 次請求失敗: {e}")
+
+        if attempt < MAX_RETRIES:
+            time.sleep(RETRY_DELAY_SECONDS)
+
+    print(f"   ❌ [{label}] 重試 {MAX_RETRIES} 次後仍失敗，最後錯誤: {last_error}")
+    return None
+
+
+# ------------------------------------------------------------------
 # Steam 官方 API：一次呼叫同時拿「遊戲名稱」+「封面圖」，並用 cache 避免重複請求
 # ------------------------------------------------------------------
 
@@ -56,7 +104,7 @@ def fetch_steam_app_details(app_id, cache):
     result = None
     try:
         url = f"https://store.steampowered.com/api/appdetails?appids={app_id}&l=tchinese"
-        res = requests.get(url, headers=HEADERS, timeout=8)
+        res = SCRAPER.get(url, headers=HEADERS, timeout=8)
         if res.status_code == 200:
             data = res.json()
             app_data = data.get(str(app_id), {})
@@ -76,7 +124,7 @@ def fetch_steam_app_details(app_id, cache):
 
 def check_image_exists(img_url):
     try:
-        response = requests.head(img_url, headers=HEADERS, timeout=5)
+        response = SCRAPER.head(img_url, headers=HEADERS, timeout=5)
         return response.status_code == 200
     except Exception as e:
         print(f"   ⚠️ 檢查圖片是否存在失敗 ({img_url}): {e}")
@@ -155,11 +203,12 @@ def extract_all_store_links_and_pure_images(page_url):
     freesteam_main_image = None
     steam_app_cache = {}
 
+    time.sleep(0.5)
+    res = fetch_url(page_url, timeout=10, label="文章頁面")
+    if res is None:
+        return [], [], None, steam_app_cache
+
     try:
-        time.sleep(0.5)
-        res = requests.get(page_url, headers=HEADERS, timeout=10)
-        if res.status_code != 200:
-            return [], [], None, steam_app_cache
         inner_soup = BeautifulSoup(res.text, 'html.parser')
 
         og_img = inner_soup.select_one('meta[property="og:image"]')
@@ -229,6 +278,7 @@ def extract_all_store_links_and_pure_images(page_url):
     if not widget_steam_urls:
         widget_steam_urls = [x for x in all_game_urls_in_article if "store.steampowered.com" in x]
 
+    print(f"   📦 本篇文章抓到 {len(found_stores)} 個商店連結。")
     return found_stores, widget_steam_urls, freesteam_main_image, steam_app_cache
 
 
@@ -321,8 +371,12 @@ def process_article(article_url, title):
 
 def run_test_mode():
     print(f"⚠️ 【強制指定測試網址】正在解析: {TEST_URL}")
+    res = fetch_url(TEST_URL, timeout=10, label="測試網址")
+    if res is None:
+        print("   ❌ 無法連線到測試網址。")
+        return
+
     try:
-        res = requests.get(TEST_URL, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
         title_tag = soup.select_one('h1.entry-title, h1')
         title = title_tag.text.strip() if title_tag else "測試限免遊戲"
@@ -336,10 +390,20 @@ def run_scheduled_mode():
     print(f"📋 載入歷史紀錄，目前已記憶了 {len(history)} 個網址。")
 
     count = 0
+    response = fetch_url(URL_FREESTEAM, timeout=15, label="限免列表頁")
+    if response is None:
+        print("❌ 無法取得限免列表頁，本次排程結束（history 不會被覆寫）。")
+        return
+
     try:
-        response = requests.get(URL_FREESTEAM, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = soup.find_all('article')
+        print(f"   📰 列表頁共抓到 {len(articles)} 篇文章區塊。")
+
+        if not articles:
+            # 抓到 0 篇文章通常代表被防機器人機制擋下，印出前 300 字方便排查
+            print("   ⚠️ 抓不到任何 <article> 標籤，可能被網站擋下。頁面內容片段：")
+            print("   " + response.text[:300].replace("\n", " "))
 
         for article in reversed(articles[:5]):
             tag = article.select_one('.entry-title a, h2 a, h3 a')
@@ -366,7 +430,7 @@ def run_scheduled_mode():
 
 
 def main():
-    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（精簡重構版）...")
+    print("🚀 GitHub Actions 智慧即時限免爬蟲啟動（cloudscraper + 偵錯強化版）...")
 
     if IS_TEST_MODE and TEST_URL:
         run_test_mode()
