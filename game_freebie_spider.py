@@ -11,7 +11,7 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 IS_TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true" or "--test" in sys.argv
 TEST_URL = os.environ.get("TEST_URL", "").strip()
 
-URL_FREESTEAM = "https://freesteam.games/category/limited-time-free"
+URL_FREESTEAM = "https://freesteam.games/category/free-games"
 HISTORY_FILE = "posted_links.txt"
 
 MAX_RETRIES = 3
